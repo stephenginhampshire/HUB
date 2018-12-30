@@ -22,6 +22,7 @@
 //
 
 
+
 // This is used to define code in the template that is specific to one class implementation
 // unused code canbe deleted and this definition removed.
 #define Telescope

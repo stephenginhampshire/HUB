@@ -6,7 +6,7 @@ using System.Runtime.InteropServices;
 using ASCOM.DeviceInterface;
 using System.Collections;
 using System.Threading;
-
+ 
 namespace ASCOM.JS_Telecope
 {
     #region Rate class
