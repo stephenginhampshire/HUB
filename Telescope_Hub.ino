@@ -15,7 +15,7 @@
 /* Functionality Checklist -------------------------------------------------------------------------------------------
 	Hub display turns off and on
 	running led flashes
-	Focuser display turns off and on
+	Focuser display turns off and on 
 */
 // Inclusions ------------------------------------------------------------------------------
 #include <Wire.h>
