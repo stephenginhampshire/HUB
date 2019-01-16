@@ -26,10 +26,10 @@
   Version 2.0.2: Added cloud access support for the Ethernet library
   Version 2.0.1: Added beta support for cloud access via cloud.arest.io
   Version 2.0.0: Added beta support for MQTT communications
-  Version 1.9.10: Added support for floats & Strings for Uno (without the CC3000 chip)
+  Version 1.9.10: Added support for doubles & Strings for Uno (without the CC3000 chip)
   Version 1.9.8: Added support for ESP8266 chip
   Version 1.9.7: Added support for Arduino 1.6.2
-  Version 1.9.6: Added support for float variables for Arduino Mega
+  Version 1.9.6: Added support for double variables for Arduino Mega
   Version 1.9.5: Added compatibility with Arduino IDE 1.5.8
   Version 1.9.4: Bug fixes & added support for configuring analog pints as digital outputs
   Version 1.9.3: Added description of available variables for the /id and / routes
@@ -984,10 +984,10 @@ void process(char c){
          }
        }
 
-       // Check if variable name is in float array (Mega & ESP8266 only)
+       // Check if variable name is in double array (Mega & ESP8266 only)
        #if defined(__AVR_ATmega1280__) || defined(__AVR_ATmega2560__) || defined(ESP8266) || defined(CORE_WILDFIRE) || !defined(ADAFRUIT_CC3000_H) || defined(ESP32)
-       for (uint8_t i = 0; i < float_variables_index; i++){
-         if(answer.startsWith(float_variables_names[i])) {
+       for (uint8_t i = 0; i < double_variables_index; i++){
+         if(answer.startsWith(double_variables_names[i])) {
 
            // End here
            pin_selected = true;
@@ -1000,7 +1000,7 @@ void process(char c){
        }
        #endif
 
-       // Check if variable name is in float array (Mega & ESP8266 only)
+       // Check if variable name is in double array (Mega & ESP8266 only)
        #if defined(__AVR_ATmega1280__) || defined(__AVR_ATmega2560__) || defined(ESP8266) || defined(CORE_WILDFIRE) || !defined(ADAFRUIT_CC3000_H) || defined(ESP32)
        for (uint8_t i = 0; i < string_variables_index; i++){
          if(answer.startsWith(string_variables_names[i])) {
@@ -1273,17 +1273,17 @@ bool send_command(bool headers) {
        }
   }
 
-  // Float ariable selected (Mega only)
+  // double ariable selected (Mega only)
   #if defined(__AVR_ATmega1280__) || defined(__AVR_ATmega2560__) || defined(ESP8266) || defined(CORE_WILDFIRE) || !defined(ADAFRUIT_CC3000_H) || defined(ESP32)
   if (command == 'l') {
 
        // Send feedback to client
-       if (LIGHTWEIGHT){addToBuffer(*float_variables[value]);}
+       if (LIGHTWEIGHT){addToBuffer(*double_variables[value]);}
        else {
         addToBuffer(F("{\""));
-        addToBuffer(float_variables_names[value]);
+        addToBuffer(double_variables_names[value]);
         addToBuffer(F("\": "));
-        addToBuffer(*float_variables[value]);
+        addToBuffer(*double_variables[value]);
         addToBuffer(F(", "));
        }
   }
@@ -1384,7 +1384,7 @@ virtual void root_answer() {
     #if defined(__AVR_ATmega1280__) || defined(__AVR_ATmega2560__) || defined(ESP8266) || defined(CORE_WILDFIRE) || !defined(ADAFRUIT_CC3000_H)
 
     // Int variables
-    if (variables_index == 0 && string_variables_index == 0 && float_variables_index == 0){
+    if (variables_index == 0 && string_variables_index == 0 && double_variables_index == 0){
       addToBuffer(F(" }, "));
     }
     else {
@@ -1411,13 +1411,13 @@ virtual void root_answer() {
         }
 
       }
-      if (float_variables_index > 0){
+      if (double_variables_index > 0){
 
-        for (uint8_t i = 0; i < float_variables_index; i++){
+        for (uint8_t i = 0; i < double_variables_index; i++){
           addToBuffer(F("\""));
-          addToBuffer(float_variables_names[i]);
+          addToBuffer(double_variables_names[i]);
           addToBuffer(F("\": "));
-          addToBuffer(*float_variables[i]);
+          addToBuffer(*double_variables[i]);
           addToBuffer(F(", "));
         }
 
@@ -1477,13 +1477,13 @@ void variable(char * variable_name, int *variable){
 
 }
 
-// Float variables (Mega & ESP only, or without CC3000)
+// double variables (Mega & ESP only, or without CC3000)
 #if defined(__AVR_ATmega1280__) || defined(__AVR_ATmega2560__) || defined(ESP8266) || defined(CORE_WILDFIRE) || !defined(ADAFRUIT_CC3000_H) || defined(ESP32)
-void variable(char * variable_name, float *variable){
+void variable(char * variable_name, double *variable){
 
-  float_variables[float_variables_index] = variable;
-  float_variables_names[float_variables_index] = variable_name;
-  float_variables_index++;
+  double_variables[double_variables_index] = variable;
+  double_variables_names[double_variables_index] = variable_name;
+  double_variables_index++;
 
 }
 #endif
@@ -1686,7 +1686,7 @@ void addToBuffer(int toAdd){
 
 // Add to output buffer (Mega & ESP only)
 #if defined(__AVR_ATmega1280__) || defined(__AVR_ATmega2560__) || defined(ESP8266) || defined(CORE_WILDFIRE) || !defined(ADAFRUIT_CC3000_H)
-void addToBuffer(float toAdd){
+void addToBuffer(double toAdd){
 
   char number[10];
   dtostrf(toAdd, 5, 2, number);
@@ -1925,11 +1925,11 @@ private:
 
   #endif
 
-  // Float variables arrays (Mega & ESP8266 only)
+  // double variables arrays (Mega & ESP8266 only)
   #if defined(__AVR_ATmega1280__) || defined(__AVR_ATmega2560__) || defined(ESP8266) || defined(CORE_WILDFIRE) || !defined(ADAFRUIT_CC3000_H) || defined(ESP32)
-  uint8_t float_variables_index;
-  float * float_variables[NUMBER_VARIABLES];
-  char * float_variables_names[NUMBER_VARIABLES];
+  uint8_t double_variables_index;
+  double * double_variables[NUMBER_VARIABLES];
+  char * double_variables_names[NUMBER_VARIABLES];
   #endif
 
   // String variables arrays (Mega & ESP8266 only)

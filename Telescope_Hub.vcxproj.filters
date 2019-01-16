@@ -24,9 +24,6 @@
     <ClInclude Include="HUB_Commands.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="Arest_Variables_Functions.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
     <ClInclude Include="__vm\.HUB.vsarduino.h">
       <Filter>Header Files</Filter>
     </ClInclude>

@@ -72,7 +72,7 @@ typedef void *__builtin_va_list;
 #define pgm_read_byte(address_short) uint8_t() 
 #define pgm_read_word(address_short) uint16_t() 
 #define pgm_read_dword(address_short) uint32_t()
-#define pgm_read_float(address_short) float()
+#define pgm_read_double(address_short) double()
 #define pgm_read_ptr(address_short)   short()
 
 #include "Telescope_Hub.ino"
