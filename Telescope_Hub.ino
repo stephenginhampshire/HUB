@@ -23,32 +23,33 @@
 #include "HUB_Commands.h"
 
 #define DEBUG_OUTPUT_SETUP
-#define DEBUG_OUTPUT_MOTOR_DRIVERS
-#define DEBUG_OUTPUT_FOCUSER
-#define DEBUG_OUTPUT_CONTROLLER
-#define DEBUG_OUTPUT_COMMANDS
-#define DEBUG_OUTPUT_FIELDS
-#define DEBUG_OUTPUR_COMMANDS
-#define DEBUG_MOTOR_COMMANDS
-#define DEBUG_FOCUSER_COMMANDS
-#define DEBUG_HUB_COMMANDS
+//#define DEBUG_OUTPUT_MOTOR_DRIVERS
+//#define DEBUG_OUTPUT_FOCUSER
+//#define DEBUG_OUTPUT_CONTROLLER
+//#define DEBUG_OUTPUT_COMMANDS
+//#define DEBUG_OUTPUT_FIELDS
+//#define DEBUG_OUTPUR_COMMANDS
+//#define DEBUG_MOTOR_COMMANDS
+//#define DEBUG_FOCUSER_COMMANDS
+//#define DEBUG_HUB_COMMANDS
 #define DEBUG_LOGGER
+#define DEBUG_DUMMY_DATETIME
 
-#define WDT						// enable WatchDog Timer
-#define ETHERNET				// enable ethernet			
+//#define WDT						// enable WatchDog Timer
+//#define ETHERNET				// enable ethernet			
 
 #ifdef WDT
 	#include <avr/wdt.h>
 #endif
 // Definitions ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-#define display_DIN		10		// MAX729 DATA pin		D green
-#define display_CS		11		// MAX729 CS/LOAD pin	D0 blue
-#define display_CLK		12		// MAX729 CLK pin		D2 yellow
-#define logger_RX_pin	12
-#define logger_TX_pin	14
-#define GREEN_LED_pin	49		// 49 = Green
-#define BLUE_LED_pin	48		// 48 = Blue
-#define RED_LED_pin		46		// 46 = Red
+#define display_DIN		8		// MAX729 DATA pin		blue wire 
+#define display_CS		9		// MAX729 CS/LOAD pin	yellow wire 
+#define display_CLK		10		// MAX729 CLK pin		green wire
+#define logger_RX_pin	11		// yellow
+#define logger_TX_pin	12		// blue
+#define GREEN_LED_pin	2		
+#define ORANGE_LED_pin	3		
+#define RED_LED_pin		4		
 
 #define altitude_serial Serial1
 #define altitude_RXpin  19
@@ -74,7 +75,7 @@
 #define stage_wait_day_month		3
 #define stage_wait_year_hour		4
 #define stage_wait_minute_second	5
-#define stage_complete				6
+#define stage_wait_complete			6
 
 #define LED_FLASH_TIME		20      // number of milli seconds to light the LEDs
 // Constants ------------------------------------------------------------------------------------------
@@ -169,14 +170,15 @@ enum {
 };
 enum { OFF = 0, ON = 1};
 bool display_flag = false;
-const byte DP = 0b0000000;
-const byte t = 0b0000;
-const byte h = 0b0000;
-const byte P = 0b000;
-const byte dash = 0b0000000;
-const byte E = 0b000;
-const byte R = 0b00;
-const byte O = 0b00;
+const byte DP = 0b10000000;
+const byte t = 0b00001111;
+const byte h = 0b00010111;
+const byte P = 0b01100111;
+const byte dash = 0b00000001;
+const byte E = 0b01001111;
+const byte R = 0b01110111;
+const byte S = 0b01011011;
+const byte O = 0b01111110;
 const byte space = 0b00000000;
 bool focuser_display_on = true;
 char display_string[9];
@@ -234,8 +236,8 @@ void setup() {
   Serial.print(millis(), DEC);
   Serial.println("\tWatchdog Setup Complete");
 #endif
-  digitalWrite(BLUE_LED_pin, LOW);
-  pinMode(BLUE_LED_pin, OUTPUT);
+  digitalWrite(ORANGE_LED_pin, LOW);
+  pinMode(ORANGE_LED_pin, OUTPUT);
   digitalWrite(GREEN_LED_pin, LOW);
   pinMode(GREEN_LED_pin, OUTPUT);
   digitalWrite(RED_LED_pin, LOW);
@@ -282,8 +284,8 @@ void loop() {
 	if (Check_Azimuth_Packet() == true) Process_Incoming_Packet_from_Motor_Driver((unsigned char)SOURCE_AZIMUTH_MOTOR);
 	if (Check_Focuser_Packet() == true) Process_Incoming_Packet_from_Focuser();
 
-	if ((millis() | (long)60000) || date_required != (int)stage_complete) {				// get the date and time from the controller every minute
-		if (date_required == (int)stage_complete) date_required = (int)stage_day_month;
+	if ((!(millis() % (long)60000)) || date_required != (int)stage_wait_complete) {				// get the date and time from the controller every minute
+		if (date_required == (int)stage_wait_complete) date_required = (int)stage_day_month;
 		get_datetime();
 	}
 	//-- TEST/DIAGNOSTICS --------------------------------------------------------------------------------------------------------
@@ -577,8 +579,8 @@ void loop() {
 			parameter_two = 0;
 			break;
 		}
-		}
-		if (command_number != (unsigned char)0) {
+		}			// end of switch
+		if (command_number != (unsigned char)NULL) {
 			if (command_sent == false) {
 				Serial.print(millis(), DEC);
 				Serial.print("\tSending Command to Focuser : ");
@@ -588,15 +590,20 @@ void loop() {
 				Serial.print(" Parameter One : ");
 				Serial.print(parameter_one, DEC);
 				Serial.print(", Parameter Two : ");
-				Serial.print(parameter_two, DEC);
+				Serial.println(parameter_two, DEC);
 				Prepare_Packet_for_Output(source, command_number, parameter_one, parameter_two);
 				Send_Packet_to_Focuser();
 				command_sent = true;
 			}
 		}
+		else {
+			Serial.print(millis(), DEC);
+			Serial.println("\tNo Command Sent");
+			command_sent = true;
+		}
 #endif
 #ifdef DEBUG_MOTOR_COMMANDS
-		motor = (unsigned char)SOURCE_ALTITUDE_MOTOR;
+		//		motor = (unsigned char)SOURCE_ALTITUDE_MOTOR;
 		//		motor = (unsigned char)SOURCE_AZIMUTH_MOTOR;
 		//		motor = (unsigned char)SOURCE_BOTH_MOTORS;
 
@@ -1052,8 +1059,8 @@ void loop() {
 			parameter_two = 0;
 			break;
 		}
-		}
-		if (command_number != (unsigned char)0) {
+		}		// end of switch
+		if (command_number != (unsigned char)command_number) {
 			if (command_sent == false) {
 				Serial.print(millis(), DEC);
 				Serial.print("\tSending ");
@@ -1078,16 +1085,24 @@ void loop() {
 				command_sent = true;
 			}
 		}
-	}
 #endif	//--End of Debug ---------------------------------------------------------------------------------------------------------------------------
+	}
 } // end of main loop
 // Controller Functions ---------------------------------------------------------------------------------------------------
 void get_datetime(void) {
-	unsigned char source = (unsigned char) SOURCE_HUB;
+#ifdef DEBUG_DUMMY_DATETIME
+	date_required = (unsigned char) stage_wait_complete;
+	system_day = 1;
+	system_month = 1;
+	system_year = 2019;
+	system_hour = 9;
+	system_minute = 30;
+	system_second = 55;
+#else
+	unsigned char source = (unsigned char)SOURCE_HUB;
 	unsigned char command_number = 0;
 	double parameter_one = 0;
 	double parameter_two = 0;
-	
 	switch (date_required) {
 	case 0: {												// day and month required
 		command_number = (unsigned char)HUB_Get_Day_Month;
@@ -1120,6 +1135,7 @@ void get_datetime(void) {
 		break;
 	}
 	}
+#endif
 }
 void Hub_Display_On() {
 #ifdef DEBUG_OUTPUT_COMMANDS
@@ -1225,125 +1241,107 @@ void serialEvent3() {
 		focuser_inbuffer[focuser_inptr++] = (unsigned char)focuser_serial.read();        // add the received character to the buffer and increment character count
 	}
 }
-void write_logger(unsigned char direction, unsigned char source, unsigned char command_number, double parameter_one, double parameter_two) {
+void write_logger(unsigned char packet_type, unsigned char direction, unsigned char source, unsigned char command_number, double parameter_one, double parameter_two) {
 	char temp_str[2];
 	int i,x;
 	String Logger_Message = "";
-	Logger_Message.reserve(40);
-
+	Logger_Message.reserve(60);
 	dtostrf(system_day, 2, 0, temp_str);
 	x = sizeof(temp_str) - 1;
 	for (i = 0; i < x; i++) {
-		Logger_Message += temp_str[i];
+		Logger_Message += temp_str[i];					// dd
 	}
-	Logger_Message += "/";
+	Logger_Message += "/";								// dd/
 	dtostrf(system_month, 2, 0, temp_str);
 	x = sizeof(temp_str) - 1;
 	for (i = 0; i < x; i++) {
-		Logger_Message += temp_str[i];
+		Logger_Message += temp_str[i];					// dd/mm
 	}
-	Logger_Message += "/";
+	Logger_Message += "/";								// dd/mm/
 	dtostrf(system_year, 4, 0, temp_str);
 	x = sizeof(temp_str) - 1;
 	for (i = 0; i < x; i++) {
-		Logger_Message += temp_str[i];
+		Logger_Message += temp_str[i];					// dd/mm/yy
 	}
-	Logger_Message += " ";
+	Logger_Message += " ";								// dd/mm/yy 
 	dtostrf(system_hour, 2, 0, temp_str);
 	x = sizeof(temp_str) - 1;
 	for (i = 0; i < x; i++) {
-		Logger_Message += temp_str[i];
+		Logger_Message += temp_str[i];					// dd/mm/yy hh
 	}
-	Logger_Message += ":";
+	Logger_Message += ":";								// dd/mm/yy hh:
 	dtostrf(system_minute, 2, 0, temp_str);
 	x = sizeof(temp_str) - 1;
 	for (i = 0; i < x; i++) {
-		Logger_Message += temp_str[i];
+		Logger_Message += temp_str[i];					// dd/mm/yy hh:mm
 	}
-	Logger_Message += ":";
+	Logger_Message += ":";								// dd/mm/yy hh:mm:
 	dtostrf(system_second, 2, 0, temp_str);
 	x = sizeof(temp_str) - 1;
 	for (i = 0; i < x; i++) {
-		Logger_Message += temp_str[i];
+		Logger_Message += temp_str[i];					// dd/mm/yy hh:mm:ss
 	}
-
+	if (direction == (unsigned char)TO) {
+		Logger_Message += " to ";					// dd/mm/yy hh:mm:ss TO
+	}
+	else {
+		Logger_Message += " from ";					// dd/mm/yy hh:mm:ss FROM
+	}
 	switch ((int)source) {
 	case SOURCE_CONTROLLER: {
-		if (direction == (unsigned char)TO) {
-			Logger_Message += ",TO ";
-		} else {
-			Logger_Message += ",FROM ";
-		}
-		Logger_Message += "Controller ";
+		Logger_Message += "Controller ";				// dd/mm/yy hh:mm:ss TO Controller 
 		break;
 	}
 	case SOURCE_ALTITUDE_MOTOR: {
-		if (direction == (unsigned char)TO) {
-			Logger_Message += ",TO ";
-		}
-		else {
-			Logger_Message += ",FROM ";
-		}
 		Logger_Message += "Altitude Motor";
 		break;
 	}
 	case SOURCE_AZIMUTH_MOTOR: {
-		if (direction == (unsigned char)TO) {
-			Logger_Message += ",TO ";
-		}
-		else {
-			Logger_Message += ",FROM ";
-		}
 		Logger_Message += "Azimuth Motor";
 		break;
 	}
 	case SOURCE_FOCUSER: {
-		if (direction == (unsigned char)TO) {
-			Logger_Message += ",TO ";
-		}
-		else {
-			Logger_Message += ",FROM ";
-		}
 		Logger_Message += "Focuser";
 		break;
 	}
 	case SOURCE_BOTH_MOTORS: {
-		if (direction == (unsigned char)TO) {
-			Logger_Message += ",TO ";
-		}
-		else {
-			Logger_Message += ",FROM ";
-		}
 		Logger_Message += "Both Motors";
 		break;
 	}
 	case SOURCE_HUB: {
-		if (direction == (unsigned char)TO) {
-			Logger_Message += ",TO ";
-		}
-		else {
-			Logger_Message += ",FROM ";
-		}
 		Logger_Message += "Hub";
 		break;
 	}
 	}
-	Logger_Message += ", ";
-	dtostrf(parameter_one, 6, 2, temp_str);
+	Logger_Message += ",";									// dd/mm/yy hh:mm:ss TO Controller, 
+	dtostrf(command_number, 2, 0, temp_str);
 	x = sizeof(temp_str) - 1;
 	for (int i = 0; i < x; i++) {
-		Logger_Message += temp_str[i];
+		Logger_Message += temp_str[i];						// dd/mm/yy hh:mm:ss TO Controller,99 
 	}
-	Logger_Message += ", ";
-	dtostrf(parameter_two, 6, 2, temp_str);
+	Logger_Message += ",";									// dd/mm/yy hh:mm:ss To Controller,99,
+	dtostrf(parameter_one, 7, 2, temp_str);
 	x = sizeof(temp_str) - 1;
 	for (int i = 0; i < x; i++) {
-		Logger_Message += temp_str[i];
+		Logger_Message += temp_str[i];						// dd/mm/yy hh:mm:ss TO Controller,99,9999.99 
+	}
+	Logger_Message += ",";									// dd/mm/yy hh:mm:ss To Controller,99,9999.99,
+	dtostrf(parameter_two, 7, 2, temp_str);
+	x = sizeof(temp_str) - 1;
+	for (int i = 0; i < x; i++) {
+		Logger_Message += temp_str[i];					
 	}
 	x = sizeof(Logger_Message) - 1;
+	if (packet_type == (unsigned char)HUB_Delete_Log_File) {
+		logger_serial.write((unsigned char)HUB_Delete_Log_File);
+	}
+	else {
+		logger_serial.write((unsigned char)STX);
+	}
 	for (int i = 0; i < x; i++) {		// send message to logger port
 		logger_serial.write(Logger_Message.charAt(i));
 	}
+	logger_serial.write((unsigned char) ETX);
 }
 void Process_Incoming_Packet_from_Motor_Driver(unsigned char motor) {// process an update message from a motor driver
 	int command_number = 0;
@@ -1355,7 +1353,7 @@ void Process_Incoming_Packet_from_Motor_Driver(unsigned char motor) {// process 
 	Serial.println("\tPacket Received from Altitude Motor");
 #endif
 	if (motor == (unsigned char)SOURCE_AZIMUTH_MOTOR) {
-		write_logger((unsigned char)FROM, (unsigned char)SOURCE_ALTITUDE_MOTOR, (unsigned char)command_number, parameter_one, parameter_two);
+		write_logger((unsigned char)NULL,(unsigned char)FROM, (unsigned char)SOURCE_ALTITUDE_MOTOR, (unsigned char)command_number, parameter_one, parameter_two);
 		Altitude_Incoming_Message_Available = false;
 #ifdef DEBUG_OUTPUT_MOTOR_DRIVER
 		Serial.print(millis(), DEC);
@@ -1366,7 +1364,7 @@ void Process_Incoming_Packet_from_Motor_Driver(unsigned char motor) {// process 
 		parameter_two =  Incoming_Message_from_Azimuth.contents.parameter_two;
 	}
 	else {
-		write_logger((unsigned char)FROM, (unsigned char)SOURCE_AZIMUTH_MOTOR, (unsigned char)command_number, parameter_one, parameter_two);
+		write_logger((unsigned char)NULL,(unsigned char)FROM, (unsigned char)SOURCE_AZIMUTH_MOTOR, (unsigned char)command_number, parameter_one, parameter_two);
 		Azimuth_Incoming_Message_Available = false;
 #ifdef DEBUG_OUTPUT_MOTOR_DRIVER
 		Serial.print(millis(), DEC);
@@ -1459,9 +1457,9 @@ void Process_Incoming_Packet_from_Focuser() {                                   
 	int command_number = 0;
 	double parameter_one = 0;
 	double parameter_two = 0;
-	Flash_Blue_Light();
+	Flash_Orange_Light();
 	Focuser_Incoming_Message_Available = false;
-	write_logger((unsigned char)FROM, (unsigned char)SOURCE_FOCUSER, (unsigned char)command_number, parameter_one, parameter_two);
+	write_logger((unsigned char)NULL,(unsigned char)FROM, (unsigned char)SOURCE_FOCUSER, (unsigned char)command_number, parameter_one, parameter_two);
 #ifdef DEBUG_FOCUSER
 	Serial.print(millis(), DEC);
 	Serial.println("\tPacket Received from Focuser");
@@ -1533,7 +1531,6 @@ void Process_Incoming_Packet_from_Controller() {
 	double parameter_one = 0;
 	double parameter_two = 0;
 	Flash_Red_Light();
-	write_logger((unsigned char)FROM, (unsigned char)SOURCE_CONTROLLER, (unsigned char)command_number, parameter_one, parameter_two);
 #ifdef DEBUG_CONTROLLER
 	Serial.print(millis(), DEC);
 	Serial.println("\tPacket Received from Controller");
@@ -1557,7 +1554,11 @@ void Process_Incoming_Packet_from_Controller() {
 	case HUB_Get_Minute_Second: {
 		system_minute = (long) parameter_one;
 		system_second = (long) parameter_two;
-		date_required = (int) stage_complete;
+		date_required = (int) stage_wait_complete;
+		break;
+	}
+	case HUB_Delete_Log_File: {
+		write_logger((unsigned char)HUB_Delete_Log_File, (unsigned char)NULL, (unsigned char)SOURCE_CONTROLLER, (unsigned char)HUB_Delete_Log_File, (double)NULL, (double)NULL);
 		break;
 	}
 		case Focuser_Current_Focuser_Position:
@@ -1678,11 +1679,13 @@ void Process_Incoming_Packet_from_Controller() {
 		case Telescope_Sync_to_AltAz:
 		case Telescope_Sync_to_Coordinates:
 		case Telescope_Sync_to_Target:
-		case Telescope_Unpark:
+		case Telescope_Unpark: {
 			Prepare_Packet_for_Output((unsigned char)SOURCE_CONTROLLER, (unsigned char)command_number, (double)parameter_one, (double)parameter_two);;
 			Send_Packet_to_Motor_Drivers((unsigned char)SOURCE_BOTH_MOTORS);
 			break;
+		}
 	}
+	write_logger((unsigned char)NULL, (unsigned char)FROM, (unsigned char)SOURCE_CONTROLLER, (unsigned char)command_number, parameter_one, parameter_two);
 }
 void Prepare_Packet_for_Output(byte source, byte command_number, double parameter_one, double parameter_two) {
 	Outgoing_Message_to_Controller.contents.header = STX;
@@ -1716,19 +1719,19 @@ void Send_Packet_to_Motor_Drivers(unsigned char motors) {
 		Serial.print(",");
 #endif
 		if (motors == (unsigned char)SOURCE_ALTITUDE_MOTOR) {
-			write_logger((unsigned char)TO, (unsigned char)SOURCE_ALTITUDE_MOTOR, command_number, parameter_one, parameter_two);
+			write_logger((unsigned char)NULL,(unsigned char)TO, (unsigned char)SOURCE_ALTITUDE_MOTOR, command_number, parameter_one, parameter_two);
 			altitude_serial.write(Outgoing_Message_to_Motor_Drivers.sg_chars[i]);
 			altitude_count++;
 			if (altitude_count > 99) altitude_count = 1;
 		}
 		if (motors == (unsigned char)SOURCE_AZIMUTH_MOTOR) {
-			write_logger((unsigned char)TO, (unsigned char)SOURCE_AZIMUTH_MOTOR, command_number, parameter_one, parameter_two);
+			write_logger((unsigned char)NULL,(unsigned char)TO, (unsigned char)SOURCE_AZIMUTH_MOTOR, command_number, parameter_one, parameter_two);
 			azimuth_serial.write(Outgoing_Message_to_Motor_Drivers.sg_chars[i]);
 			azimuth_count++;
 			if (azimuth_count > 99) azimuth_count = 1;
 		}
 		if (motors == (unsigned char)SOURCE_BOTH_MOTORS) {
-			write_logger((unsigned char)TO, (unsigned char)SOURCE_BOTH_MOTORS, command_number, parameter_one, parameter_two);
+			write_logger((unsigned char)NULL,(unsigned char)TO, (unsigned char)SOURCE_BOTH_MOTORS, command_number, parameter_one, parameter_two);
 			altitude_serial.write(Outgoing_Message_to_Motor_Drivers.sg_chars[i]);
 			azimuth_serial.write(Outgoing_Message_to_Motor_Drivers.sg_chars[i]);
 			altitude_count++;
@@ -1745,7 +1748,7 @@ void Send_Packet_to_Focuser() {
 	unsigned char command_number = Outgoing_Message_to_Focuser.contents.command_number;
 	double parameter_one = Outgoing_Message_to_Focuser.contents.parameter_one;
 	double parameter_two = Outgoing_Message_to_Focuser.contents.parameter_two;
-	write_logger((unsigned char)TO, (unsigned char)SOURCE_FOCUSER, command_number, parameter_one, parameter_two);
+	write_logger((unsigned char) 0,(unsigned char)TO, (unsigned char)SOURCE_FOCUSER, command_number, parameter_one, parameter_two);
 	focuser_count++;
 	if (focuser_count > 99) focuser_count = 1;
 #ifdef DEBUG_OUTPUT_FOCUSER
@@ -1769,7 +1772,7 @@ void Send_Packet_to_Controller() {
 	unsigned char command_number = Outgoing_Message_to_Controller.contents.command_number;
 	double parameter_one = Outgoing_Message_to_Controller.contents.parameter_one;
 	double parameter_two = Outgoing_Message_to_Controller.contents.parameter_two;
-	write_logger((unsigned char)TO, (unsigned char)SOURCE_CONTROLLER, command_number, parameter_one, parameter_two);
+	write_logger((unsigned char)NULL,(unsigned char)TO, (unsigned char)SOURCE_CONTROLLER, command_number, parameter_one, parameter_two);
 #ifdef DEBUG_OUTPUT_CONTROLLER
 	Serial.print(millis(), DEC);
 	Serial.print("\tController Message to be sent: ");
@@ -1789,7 +1792,9 @@ void Send_Packet_to_Controller() {
 		Serial.print(Outgoing_Message_to_Controller.sg_chars[i], HEX);
 		Serial.print(",");
 #endif
+#ifdef ETHERNET
 		server.write(Outgoing_Message_to_Controller.sg_chars[i]);
+#endif
 	}
 #ifdef DEBUG_OUTPUT_CONTROLLER
 	Serial.println("");
@@ -1819,14 +1824,14 @@ void Flash_Green_Light(void) {
 		green_time = millis();
 	}
 }
-void Flash_Blue_Light(void) {
+void Flash_Orange_Light(void) {
 	if (millis() - blue_time > (unsigned long)debounce) {
-		reading = digitalRead(BLUE_LED_pin);
+		reading = digitalRead(ORANGE_LED_pin);
 		if (reading == HIGH) {
-			digitalWrite(BLUE_LED_pin, LOW);
+			digitalWrite(ORANGE_LED_pin, LOW);
 		}
 		else {
-			digitalWrite(BLUE_LED_pin, HIGH);
+			digitalWrite(ORANGE_LED_pin, HIGH);
 		}
 		blue_time = millis();
 	}
@@ -1836,11 +1841,16 @@ void send_update_to_SEVEN_SEGMENT() {
 	char displayaltitude_s[2];
 	char displayazimuth_s[2];
 	char displayfocuser_s[2];
-	dtostrf(altitude_count, 2, 0, displayaltitude_s);
-	dtostrf(azimuth_count, 2, 0, displayazimuth_s);
-	dtostrf(focuser_count, 2, 0, displayfocuser_s);
-	sprintf(display_string, "%s %s %s", displayaltitude_s,displayazimuth_s,displayfocuser_s);
-	display(display_string);
+	String Display_String = "        ";
+	itoa((int)altitude_count, displayaltitude_s, 10);
+	Display_String = displayaltitude_s;
+	Display_String = Display_String + '-';
+	itoa((int)azimuth_count, displayazimuth_s, 10);
+	Display_String = Display_String + displayazimuth_s;
+	Display_String = Display_String + '-';
+	itoa((int)focuser_count, displayfocuser_s, 10);
+	Display_String = Display_String + displayfocuser_s;
+	display(Display_String);
 }
 void error(double error_number) {
 	char error_number_s[2];
@@ -1859,39 +1869,23 @@ void set_register(byte reg, byte value) {   // ... write a value into a max729 r
 void display(String thisString) { // ... display on the 7-segment display
 	set_register(display_REG_SHUTDOWN, OFF);  // turn off display
 	set_register(display_REG_SCANLIMIT, 7);   // scan limit 8 digits
-	if (display_flag == false) {							// display temp & humidity
-		set_register(display_REG_DECODE, 0b00);		// 
-		if ((thisString.charAt(0) < 0x30) || (thisString.charAt(0) > 0x39)) thisString.setCharAt(0, 0x30);
-		if ((thisString.charAt(1) < 0x30) || (thisString.charAt(1) > 0x39)) thisString.setCharAt(1, 0x30);
-		if ((thisString.charAt(3) < 0x30) || (thisString.charAt(3) > 0x39)) thisString.setCharAt(3, 0x30);
-		if ((thisString.charAt(4) < 0x30) || (thisString.charAt(4) > 0x39)) thisString.setCharAt(4, 0x30);
-		if ((thisString.charAt(8) < 0x30) || (thisString.charAt(8) > 0x39)) thisString.setCharAt(8, 0x30);
-		if ((thisString.charAt(9) < 0x30) || (thisString.charAt(9) > 0x39)) thisString.setCharAt(9, 0x30);
-		set_register(1, thisString.charAt(7));
-		set_register(2, thisString.charAt(6));
-		set_register(3, h);                         // h
-		set_register(4, thisString.charAt(4));      // 0
-		set_register(5, thisString.charAt(3));      // 2
-		set_register(6, thisString.charAt(1) | 0x80); // 3.
-		set_register(7, thisString.charAt(0));      // 2
-		set_register(8, t);                         // t
-	}
-	else {												// display position
-		set_register(display_REG_DECODE, 0b00);		// 
-		if ((thisString.charAt(0) < 0x30) || (thisString.charAt(0) > 0x39)) thisString.setCharAt(0, 0x30);
-		if ((thisString.charAt(1) < 0x30) || (thisString.charAt(1) > 0x39)) thisString.setCharAt(1, 0x30);
-		if ((thisString.charAt(2) < 0x30) || (thisString.charAt(2) > 0x39)) thisString.setCharAt(2, 0x30);
-		if ((thisString.charAt(3) < 0x30) || (thisString.charAt(3) > 0x39)) thisString.setCharAt(3, 0x30);
-		if ((thisString.charAt(4) < 0x30) || (thisString.charAt(4) > 0x39)) thisString.setCharAt(4, 0x30);
-		set_register(1, thisString.charAt(7));  //  
-		set_register(2, dash);                  //  -
-		set_register(3, thisString.charAt(4));
-		set_register(4, thisString.charAt(3));  //  9
-		set_register(5, thisString.charAt(2));  //  9
-		set_register(6, thisString.charAt(1));  //  9
-		set_register(7, thisString.charAt(0));  //  9
-		set_register(8, P);                     //  p
-	}
+	set_register(display_REG_DECODE, 0b11011011);		// 
+	if ((thisString.charAt(0) < 0x30) || (thisString.charAt(0) > 0x39)) thisString.setCharAt(0, 0x30);
+	if ((thisString.charAt(1) < 0x30) || (thisString.charAt(1) > 0x39)) thisString.setCharAt(1, 0x30);
+//	if ((thisString.charAt(2) < 0x30) || (thisString.charAt(2) > 0x39)) thisString.setCharAt(2, 0x30);
+	if ((thisString.charAt(3) < 0x30) || (thisString.charAt(3) > 0x39)) thisString.setCharAt(3, 0x30);
+	if ((thisString.charAt(4) < 0x30) || (thisString.charAt(4) > 0x39)) thisString.setCharAt(4, 0x30);
+//	if ((thisString.charAt(5) < 0x30) || (thisString.charAt(5) > 0x39)) thisString.setCharAt(5, 0x30);
+	if ((thisString.charAt(6) < 0x30) || (thisString.charAt(6) > 0x39)) thisString.setCharAt(6, 0x30);
+	if ((thisString.charAt(7) < 0x30) || (thisString.charAt(7) > 0x39)) thisString.setCharAt(7, 0x30);
+	set_register(1, thisString.charAt(7));
+	set_register(2, thisString.charAt(6));
+	set_register(3, dash);	// 6
+	set_register(4, thisString.charAt(4));	// 5
+	set_register(5, thisString.charAt(3));  // 4
+	set_register(6, dash);	// 3
+	set_register(7, thisString.charAt(1));  // 2
+	set_register(8, thisString.charAt(0));  // 1
 	set_register(display_REG_SHUTDOWN, ON);   // Turn on display
 }
 void error_display(String thisString) { // ... display on the 7-segment display, thisString is the error number

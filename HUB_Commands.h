@@ -8,57 +8,58 @@
 #ifndef HUB_COMMANDS_H
 #define HUB_COMMANDS_H
 
-int constexpr Focuser_Current_Focuser_Position = 1;
-int constexpr Focuser_Motor_Moving_Status = 2;
-int constexpr Focuser_Motor_Controller_Status = 3;
-int constexpr Focuser_Firmware_Version_String = 4;
-int constexpr Focuser_Firmware_Name_and_Version_String = 5;
-int constexpr Focuser_Target_Position = 6;
-int constexpr Focuser_Temperature = 7;
-int constexpr Focuser_Maximum_Step = 8;									// parameter_one == 0 GET, else SET
-int constexpr Focuser_Maximum_Increment = 9;
-int constexpr Focuser_Coil_Power = 10;									// parameter_one == 0 GET, else SET
-int constexpr Focuser_Reverse_Direction = 11;
-int constexpr Focuser_Motor_Speed = 12;
-int constexpr Focuser_Display_Unit = 13;
-int constexpr Focuser_User_Specified_Step_Size = 14;
-int constexpr Focuser_Step_Size = 15;
-int constexpr Focuser_Temperature_Coefficient = 16;
-int constexpr Focuser_Temperature_Compensation = 17;
-int constexpr Focuser_Temperature_Compensation_Available = 18;
-int constexpr Focuser_Home_Motor_Position_To_ZERO = 19;
-int constexpr Focuser_Step_Mode = 20;
-int constexpr Focuser_Step_Size_is_Enabled = 21;
-int constexpr Focuser_Display = 22;
-int constexpr Focuser_Temperature_Mode = 23;
-int constexpr Focuser_Reset_Arduino_Controller = 24;
-int constexpr Focuser_Reset_Focuser_Defaults = 25;
-int constexpr Focuser_Motor_Speed_Threshold_When_Moving = 26;
-int constexpr Focuser_Motor_Speed_Change_When_Moving = 27;
-int constexpr Focuser_Save_Settings_to_EEPROM = 28;
-int constexpr Focuser_Humidity = 29;
-int constexpr Focuser_Longitude = 30;
-int constexpr Focuser_Latitude = 31;
-int constexpr Focuser_Altitude = 32;
-int constexpr Focuser_BEMF = 33;
-int constexpr Focuser_Update_of_Position_When_Moving = 34;
-int constexpr Focuser_Status_of_Home_Position_Switch = 35;
-int constexpr Focuser_Jogging_Steps = 36;
-int constexpr Focuser_Jogging_State = 37;
-int constexpr Focuser_Jogging_Direction = 38;
-int constexpr Focuser_Delay_After_Move = 39;
-int constexpr Focuser_Backlash_In = 40;
-int constexpr Focuser_Backlash_Out = 41;
-int constexpr Focuser_Number_of_Backlash_Steps_In = 42;
-int constexpr Focuser_Number_of_Backlash_Steps_Out = 43;
-int constexpr Focuser_Temperature_Compensation_Direction = 44;
+int constexpr Focuser_Current_Focuser_Position = 11;
+int constexpr Focuser_Motor_Moving_Status = 12;
+int constexpr Focuser_Motor_Controller_Status = 13;
+int constexpr Focuser_Firmware_Version_String = 14;
+int constexpr Focuser_Firmware_Name_and_Version_String = 15;
+int constexpr Focuser_Target_Position = 16;
+int constexpr Focuser_Temperature = 17;
+int constexpr Focuser_Maximum_Step = 18;									// parameter_one == 0 GET, else SET
+int constexpr Focuser_Maximum_Increment = 19;
+int constexpr Focuser_Coil_Power = 20;									// parameter_one == 0 GET, else SET
+int constexpr Focuser_Reverse_Direction = 21;
+int constexpr Focuser_Motor_Speed = 22;
+int constexpr Focuser_Display_Unit = 23;
+int constexpr Focuser_User_Specified_Step_Size = 24;
+int constexpr Focuser_Step_Size = 25;
+int constexpr Focuser_Temperature_Coefficient = 26;
+int constexpr Focuser_Temperature_Compensation = 27;
+int constexpr Focuser_Temperature_Compensation_Available = 28;
+int constexpr Focuser_Home_Motor_Position_To_ZERO = 29;
+int constexpr Focuser_Step_Mode = 30;
+int constexpr Focuser_Step_Size_is_Enabled = 31;
+int constexpr Focuser_Display = 32;
+int constexpr Focuser_Temperature_Mode = 33;
+int constexpr Focuser_Reset_Arduino_Controller = 34;
+int constexpr Focuser_Reset_Focuser_Defaults = 35;
+int constexpr Focuser_Motor_Speed_Threshold_When_Moving = 36;
+int constexpr Focuser_Motor_Speed_Change_When_Moving = 37;
+int constexpr Focuser_Save_Settings_to_EEPROM = 38;
+int constexpr Focuser_Humidity = 39;
+int constexpr Focuser_Longitude = 40;
+int constexpr Focuser_Latitude = 41;
+int constexpr Focuser_Altitude = 42;
+int constexpr Focuser_BEMF = 43;
+int constexpr Focuser_Update_of_Position_When_Moving = 44;
+int constexpr Focuser_Status_of_Home_Position_Switch = 45;
+int constexpr Focuser_Jogging_Steps = 46;
+int constexpr Focuser_Jogging_State = 47;
+int constexpr Focuser_Jogging_Direction = 48;
+int constexpr Focuser_Delay_After_Move = 49;
+int constexpr Focuser_Backlash_In = 50;
+int constexpr Focuser_Backlash_Out = 51;
+int constexpr Focuser_Number_of_Backlash_Steps_In = 52;
+int constexpr Focuser_Number_of_Backlash_Steps_Out = 53;
+int constexpr Focuser_Temperature_Compensation_Direction = 54;
 
-int constexpr Focuser_to_Controller_Heartbeat = 49;
+int constexpr Focuser_to_Controller_Heartbeat = 59;
 
-int constexpr HUB_Display = 50;
-int constexpr HUB_Get_Day_Month = 60;
-int constexpr HUB_Get_Year_Hour = 61;
-int constexpr HUB_Get_Minute_Second = 62;
+int constexpr HUB_Display = 69;
+int constexpr HUB_Get_Day_Month = 70;
+int constexpr HUB_Get_Year_Hour = 71;
+int constexpr HUB_Get_Minute_Second = 72;
+int constexpr HUB_Delete_Log_File = 0x04;
 
 int constexpr Telescope_Azimuth = 100;
 int constexpr Telescope_Declination = 101;
