@@ -30,13 +30,7 @@
     <ClInclude Include="..\..\..\Git\Telescope\Telescope_Hub\Seven_Segment_Display.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="Arest_Variables_Functions.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
     <ClInclude Include="Convert_RA_to_EQU.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="aREST-master\aREST-master\aREST.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>

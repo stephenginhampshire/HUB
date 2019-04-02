@@ -61,11 +61,11 @@
 #define TO				0
 #define FROM			1
 
-#define stage_day_month				0
-#define stage_year_hour				1
+#define stage_year_month			0
+#define stage_day_hour				1
 #define stage_minute_second			2
-#define stage_wait_day_month		3
-#define stage_wait_year_hour		4
+#define stage_wait_year_month		3
+#define stage_wait_day_hour			4
 #define stage_wait_minute_second	5
 #define stage_wait_complete			6
 
@@ -160,9 +160,9 @@ bool Orange_LED_State = false;
 long Green_LED_Time_On = (long)0;
 bool Green_LED_State = false;
 unsigned long last_status_update = 0;
-char telescope_count = 0;
-char controller_count = 0;
-char focuser_count = 0;
+char telescope_packet_count = 0;
+char controller_packet_count = 0;
+char focuser_packet_count = 0;
 unsigned long last_datetime = millis();
 
 bool focuser_display_on = true;
@@ -190,42 +190,34 @@ void Process_Incoming_Packet_from_Focuser(void);
 //-- Setup --------------------------------------------------------------------------------------------------
 void setup() {
 #ifdef WDT
-  wdt_disable();													// disable watchdog timer during setup
+	wdt_disable();													// disable watchdog timer during setup
 #endif
-#ifdef MONITOR_PRINT_SETUP
-  Serial.print(millis(), DEC); Serial.println("\tSetup Commenced");
-#endif
-  Serial.begin(115200);												// Start monitor serial communication with the given baud rate.
-  while (!Serial) {
+	Serial.print(millis(), DEC); Serial.println("\tSetup Commenced");
+	Serial.begin(115200);												// Start monitor serial communication with the given baud rate.
+	while (!Serial) {
     ;
   }
-  altitude_serial.begin(altitude_baud, SERIAL_8N2);					// initialise the altitude serial port
-  azimuth_serial.begin(azimuth_baud, SERIAL_8N2);					// initialise the azimuth serial port
-  focuser_serial.begin(focuser_baud, SERIAL_8N2);					// initialise the focuser serial port
-  logger_serial.begin(logger_baud);									// initialise the logger serial port
-  altitude_serial.flush();											// clear the altitude serial buffer
-  azimuth_serial.flush();											// clear the azimuth serial buffer
-  focuser_serial.flush();											// xlear the focuser serial buffer
-  logger_serial.flush();											// clear the logger serial buffer
-#ifdef MONITOR_PRINT_SETUP
-  Serial.print(millis(), DEC); Serial.println("\tSerial Ports setup");
-  Serial.print(millis(), DEC); Serial.println("\tSetting Up Ethernet Server");
-#endif
+	altitude_serial.begin(altitude_baud, SERIAL_8N2);					// initialise the altitude serial port
+	azimuth_serial.begin(azimuth_baud, SERIAL_8N2);					// initialise the azimuth serial port
+	focuser_serial.begin(focuser_baud, SERIAL_8N2);					// initialise the focuser serial port
+	logger_serial.begin(logger_baud);									// initialise the logger serial port
+	altitude_serial.flush();											// clear the altitude serial buffer
+	azimuth_serial.flush();											// clear the azimuth serial buffer
+	focuser_serial.flush();											// xlear the focuser serial buffer
+	logger_serial.flush();											// clear the logger serial buffer
+	Serial.print(millis(), DEC); Serial.println("\tSerial Ports setup");
+	Serial.print(millis(), DEC); Serial.println("\tSetting Up Ethernet Server");
 #ifdef ETHERNET
-  if (Ethernet.begin(mac) == 0) {									//  Ethernet.begin(mac, ip, gateway, subnet);                       // Initialize the Ethernet shield
+	if (Ethernet.begin(mac) == 0) {									//  Ethernet.begin(mac, ip, gateway, subnet);                       // Initialize the Ethernet shield
 #ifdef MONITOR_PRINT_SETUP
     Serial.print(millis(), DEC); Serial.println("\tFailed to configure Ethernet using DHCP");	// no point in carrying on, so do nothing forevermore, try to configure using IP address instead of DHCP:
 #endif
 	while (1);														// Error(Ethernet_Error);
   }
-  server.begin();
-#ifdef MONITOR_PRINT_SETUP
-  Serial.print(millis(), DEC); Serial.print("\tEthernet Server Setup Complete, at "); Serial.println(Ethernet.localIP());
-#endif
+	server.begin();
+	Serial.print(millis(), DEC); Serial.print("\tEthernet Server Setup Complete, at "); Serial.println(Ethernet.localIP());
 #endif // end ETHERNET
-#ifdef MONITOR_PRINT_SETUP
-  Serial.print(millis(), DEC); Serial.println("\tASCOM setup complete");
-#endif
+	Serial.print(millis(), DEC); Serial.println("\tASCOM setup complete");
 #ifdef WDT
   Serial.print(millis(), DEC); Serial.println("\tSetting Up Watchdog");
   wdt_enable(WDTO_2S);											// enable a 2 second watchdog timeout
@@ -242,9 +234,7 @@ void setup() {
   pinMode(display_CLK, OUTPUT);
   resetDisplay();							// reset the MAX729 display
   send_update_to_SEVEN_SEGMENT();
-#ifdef MONITOR_PRINT_SETUP
   Serial.print(millis(), DEC); Serial.println("\tSetup Complete");
-#endif
 } // end setup
 // Main -----------------------------------------------------------------------------------------------------
 void loop() {
@@ -274,848 +264,47 @@ void loop() {
 	wdt_reset();													// reset the watchdog timer
 #endif
 	if (Check_Controller_Packet() == true) Process_Incoming_Packet_from_Controller();
-	if (Check_Altitude_Packet() == true) Process_Incoming_Packet_from_Telescope((unsigned char)SOURCE_ALTITUDE_MOTOR);
-	if (Check_Azimuth_Packet() == true) Process_Incoming_Packet_from_Telescope((unsigned char)SOURCE_AZIMUTH_MOTOR);
+	if (Check_Altitude_Packet() == true) Process_Incoming_Packet_from_Telescope((unsigned char)SOURCE_ALTITUDE);
+	if (Check_Azimuth_Packet() == true) Process_Incoming_Packet_from_Telescope((unsigned char)SOURCE_AZIMUTH);
 	if (Check_Focuser_Packet() == true) Process_Incoming_Packet_from_Focuser();
-	Update_datetime();													// check if time and date requires updating
+	Update_Datetime();													// check if time and date requires updating
 	Clear_LEDS();
-	//-- TEST/DIAGNOSTICS --------------------------------------------------------------------------------------------------------
-	if (millis() == 20000) {   // run the test after 20 seconds
-#ifdef DEBUG_FOCUSER_COMMANDS
-		unsigned char source = 0;
-		unsigned char motor = 0;
-		unsigned char command_number = 0;
-		double parameter_one = 0;
-		double parameter_two = 0;
-
-		//		command_number = (unsigned char)Focuser_Current_Focuser_Position;
-		//		command_number = (unsigned char)Focuser_Motor_Moving_Status;
-		//		command_number = (unsigned char)Focuser_Motor_Controller_Status;
-		//		command_number = (unsigned char)Focuser_Firmware_Version_String;
-		//		command_number = (unsigned char)Focuser_Firmware_Name_and_Version_String;
-		//		command_number = (unsigned char)Focuser_New_Target_Position;
-		//		command_number = (unsigned char)Focuser_Temperature;
-		//		command_number = (unsigned char)Focuser_Maximum_Step;									// parameter_one == 0 GET, else SET
-		//		command_number = (unsigned char)Focuser_Maximum_Increment;
-		//		command_number = (unsigned char)Focuser_Coil_Power;									// parameter_one == 0 GET, else SET
-		//		command_number = (unsigned char)Focuser_Reverse_Direction;
-		//		command_number = (unsigned char)Focuser_Motor_Speed;
-		//		command_number = (unsigned char)Focuser_Display_Unit;
-		//		command_number = (unsigned char)Focuser_User_Specified_Step_Size;
-		//		command_number = (unsigned char)Focuser_Step_Size;
-		//		command_number = (unsigned char)Focuser_Temperature_Coefficient;
-		//		command_number = (unsigned char)Focuser_Temperature_Compensation;
-		//		command_number = (unsigned char)Focuser_State_of_Temperature_Compensation;
-		//		command_number = (unsigned char)Focuser_Temperature_Compensation_Available;
-		//		command_number = (unsigned char)Focuser_Home_Motor_Position_To_ZERO;
-		//		command_number = (unsigned char)Focuser_Step_Mode;
-		//		command_number = (unsigned char)Focuser_Current_Motor_Position;
-		//		command_number = (unsigned char)Focuser_Step_Size_is_Enabled;
-		//		command_number = (unsigned char)Focuser_Display;
-		//		command_number = (unsigned char)Focuser_Display_Status;
-		//		command_number = (unsigned char)Focuser_Temperature_Mode;
-		//		command_number = (unsigned char)Focuser_Target_Motor_Position;
-		//		command_number = (unsigned char)Focuser_Reset_Arduino_Controller;
-		//		command_number = (unsigned char)Focuser_Reset_Focuser_Defaults;
-		//		command_number = (unsigned char)Focuser_Motor_Speed_Threshold_When_Moving;
-		//		command_number = (unsigned char)Focuser_Motor_Speed_Change_When_Moving;
-		//		command_number = (unsigned char)Focuser_Motor_Speed_Change_Enabled;
-		//		command_number = (unsigned char)Focuser_Save_Settings_to_EEPROM;
-		//		command_number = (unsigned char)Focuser_Humidity;
-		//		command_number = (unsigned char)Focuser_Longitude;
-		//		command_number = (unsigned char)Focuser_Latitude;
-		//		command_number = (unsigned char)Focuser_Altitude;
-		//		command_number = (unsigned char)Focuser_BEMF;
-		//		command_number = (unsigned char)Focuser_Update_of_Position_When_Moving;
-		//		command_number = (unsigned char)Focuser_Status_of_Home_Position_Switch;
-		//		command_number = (unsigned char)Focuser_Jogging_Steps;
-		//		command_number = (unsigned char)Focuser_Jogging_State;
-		//		command_number = (unsigned char)Focuser_Jogging_Direction;
-		//		command_number = (unsigned char)Focuser_Delay_After_Move;
-		//		command_number = (unsigned char)Focuser_Backlash_In;
-		//		command_number = (unsigned char)Focuser_Backlash_Out;
-		//		command_number = (unsigned char)Focuser_Number_of_Backlash_Steps_In;
-		//		command_number = (unsigned char)Focuser_Number_of_Backlash_Steps_Out;
-		//		command_number = (unsigned char)Focuser_Temperature_Compensation_Direction;
-		//		command_number = (unsigned char)Focuser_to_Controller_Heartbeat;
-
-		switch ((int)command_number) {
-		case Telescope_Azimuth: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Focuser_Current_Focuser_Position: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Focuser_Motor_Moving_Status: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Focuser_Motor_Controller_Status: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Focuser_Firmware_Version_String: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Focuser_Firmware_Name_and_Version_String: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Focuser_Target_Position: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Focuser_Temperature: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Focuser_Maximum_Step: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Focuser_Maximum_Increment: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Focuser_Coil_Power: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Focuser_Motor_Speed: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Focuser_Display_Unit: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Focuser_User_Specified_Step_Size: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Focuser_Step_Size: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Focuser_Temperature_Coefficient: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Focuser_Temperature_Compensation: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Focuser_Temperature_Compensation_Enabled: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Focuser_Move_to_Position: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Focuser_Step_Mode: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Focuser_Step_Size_Enabled: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Focuser_Display: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Focuser_Temperature_Mode: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Focuser_Reset_Arduino_Controller: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Focuser_Reset_Focuser_Defaults: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Focuser_Motor_Speed_Threshold_When_Moving: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Focuser_Motor_Speed_Change_When_Moving: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Focuser_Save_Settings_to_EEPROM: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Focuser_Humidity: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Focuser_Longitude: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Focuser_Latitude: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Focuser_Altitude: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Focuser_Voltages: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Focuser_Update_of_Position_When_Moving: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Focuser_Status_of_Home_Position_Switch: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Focuser_Jogging_Steps: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Focuser_Jogging_State: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Focuser_Jogging_Direction: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Focuser_Delay_After_Move: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Focuser_Backlash_In: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Focuser_Backlash_Out: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Focuser_Number_of_Backlash_Steps_In: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Focuser_Number_of_Backlash_Steps_Out: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Focuser_Temperature_Compensation_Direction: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Focuser_to_Controller_Heartbeat: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		}			// end of switch
-		if (command_number != (unsigned char)NULL) {
-			if (command_sent == false) {
-				Serial.print(millis(), DEC); Serial.print("\tSending Command to Focuser: "); Serial.print(command_number, DEC);
-				Serial.print(", Source : "); Serial.print(source, DEC);
-				Serial.print(" Parameter One : "); Serial.print(parameter_one, DEC);
-				Serial.print(", Parameter Two : "); Serial.println(parameter_two, DEC);
-				Prepare_Packet_for_Output(source, command_number, parameter_one, parameter_two);
-				Send_Packet_to_Focuser();
-				command_sent = true;
-			}
-		}
-		else {
-			Serial.print(millis(), DEC); Serial.println("\tNo Focuser Command Sent");
-			command_sent = true;
-		}
-#endif
-#ifdef DEBUG_TELESCOPE_COMMANDS
-		//		motor = (unsigned char)SOURCE_ALTITUDE_MOTOR;
-		//		motor = (unsigned char)SOURCE_AZIMUTH_MOTOR;
-		//		motor = (unsigned char)SOURCE_BOTH_MOTORS;
-
-		//		command_number = (unsigned char)Telescope_Azimuth;
-		//		command_number = (unsigned char)Telescope_Declination;
-		//		command_number = (unsigned char)Telescope_Can_Unpark;
-		//		command_number = (unsigned char)Telescope_Can_Sync_AltAz;
-		//		command_number = (unsigned char)Telescope_Can_Sync;
-		//		command_number = (unsigned char)Telescope_Can_Slew_Async;
-		//		command_number = (unsigned char)Telescope_Can_Slew_AltAz_Async;
-		//		command_number = (unsigned char)Telescope_Can_Slew_AltAz;
-		//		command_number = (unsigned char)Telescope_Can_Slew;
-		//		command_number = (unsigned char)Telescope_Can_Set_Tracking;
-		//		command_number = (unsigned char)Telescope_Can_Set_Right_Ascension_Rate;
-		//		command_number = (unsigned char)Telescope_Can_Set_Pier_Side;
-		//		command_number = (unsigned char)Telescope_Can_Set_Park;
-		//		command_number = (unsigned char)Telescope_Can_Set_Guide_Rates;
-		//		command_number = (unsigned char)Telescope_Can_Set_Declination_Rate;
-		//		command_number = (unsigned char)Telescope_Can_Pulse_Guide;
-		//		command_number = (unsigned char)Telescope_Declination_Rate;
-		//		command_number = (unsigned char)Telescope_Does_Refraction;
-		//		command_number = (unsigned char)Telescope_Equatorial_System;
-		//		command_number = (unsigned char)Telescope_Focal_Length;
-		//		command_number = (unsigned char)Telescope_Tracking_Rate;
-		//		command_number = (unsigned char)Telescope_Tracking;
-		//		command_number = (unsigned char)Telescope_Target_Right_Ascension;
-		//		command_number = (unsigned char)Telescope_Target_Declination;
-		//		command_number = (unsigned char)Telescope_Slew_Settle_Time;
-		//		command_number = (unsigned char)Telescope_Slewing;
-		//		command_number = (unsigned char)Telescope_Site_Longitude;
-		//		command_number = (unsigned char)Telescope_Can_Park;
-		//		command_number = (unsigned char)Telescope_Site_Latitude;
-		//		command_number = (unsigned char)Telescope_Sidereal_Time;
-		//		command_number = (unsigned char)Telescope_Side_of_Pier;
-		//		command_number = (unsigned char)Telescope_Right_Ascension_Rate;
-		//		command_number = (unsigned char)Telescope_Right_Ascension;
-		//		command_number = (unsigned char)Telescope_Is_Pulse_Guiding;
-		//		command_number = (unsigned char)Telescope_Guide_Rate_Right_Ascension;
-		//		command_number = (unsigned char)Telescope_Guide_Rate_Declination;
-		//		command_number = (unsigned char)Telescope_Site_Elevation;
-		//		command_number = (unsigned char)Telescope_Can_Find_Home ;
-		//		command_number = (unsigned char)Telescope_UTCDATE;
-		//		command_number = (unsigned char)Telescope_At_Park;
-		//		command_number = (unsigned char)Telescope_At_Home;
-		//		command_number = (unsigned char)Telescope_Aperture_Diameter;
-		//		command_number = (unsigned char)Telescope_Aperture_Area;
-		//		command_number = (unsigned char)Telescope_Altitude;
-		//		command_number = (unsigned char)Telescope_Alignment_Mode;
-		//		command_number = (unsigned char)Telescope_Interface_Version;
-		//		command_number = (unsigned char)Telescope_Driver_Version;
-		//		command_number = (unsigned char)Telescope_Connected;
-		//		command_number = (unsigned char)Telescope_Tracking_Rates;
-		//		command_number = (unsigned char)Telescope_Abort_Slew;
-		//		command_number = (unsigned char)Telescope_Action;
-		//		command_number = (unsigned char)Telescope_Axis_Rates;
-		//		command_number = (unsigned char)Telescope_Can_Move_Axis;
-		//		command_number = (unsigned char)Telescope_Command_Blind;
-		//		command_number = (unsigned char)Telescope_Command;
-		//		command_number = (unsigned char)Telescope_Destination_Side_of_Pier;
-		//		command_number = (unsigned char)Telescope_Dispose;
-		//		command_number = (unsigned char)Telescope_Find_Home;
-		//		command_number = (unsigned char)Telescope_Move_Axis;
-		//		command_number = (unsigned char)Telescope_Park;
-		//		command_number = (unsigned char)Telescope_Pulse_Guide;
-		//		command_number = (unsigned char)Telescope_Set_Park;
-		//		command_number = (unsigned char)Telescope_Setup_Dialog;
-		//		command_number = (unsigned char)Telescope_Slew_to_AltAz;
-		//		command_number = (unsigned char)Telescope_Slew_to_AltAz_Async;
-		//		command_number = (unsigned char)Telescope_Slew_to_Coordinates;
-		//		command_number = (unsigned char)Telescope_Slew_to_Coordinates_Async;
-		//		command_number = (unsigned char)Telescope_Slew_to_Target;
-		//		command_number = (unsigned char)Telescope_Slew_to_Target_Asyn;
-		//		command_number = (unsigned char)Telescope_Sync_to_AltAz;
-		//		command_number = (unsigned char)Telescope_Sync_to_Coordinates;
-		//		command_number = (unsigned char)Telescope_Sync_to_Target;
-		//		command_number = (unsigned char)Telescope_Unpark;
-		//		command_number = (unsigned char)Telescope_Altitude_to_Controller_Heartbest;
-		//		command_number = (unsigned char)Telescope_Azimuth_to_Controller_Heartbeat;
-
-		switch ((int)command_number) {
-		case Telescope_Azimuth: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Telescope_Declination: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Telescope_Can_Unpark: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Telescope_Can_Sync_AltAz: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Telescope_Can_Sync: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Telescope_Can_Slew_Async: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Telescope_Can_Slew_AltAz_Async: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Telescope_Can_Slew_AltAz: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Telescope_Can_Slew: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Telescope_Can_Set_Tracking: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Telescope_Can_Set_Right_Ascension_Rate: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Telescope_Can_Set_Pier_Side: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Telescope_Can_Set_Park: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Telescope_Can_Set_Guide_Rates: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Telescope_Can_Set_Declination_Rate: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Telescope_Can_Pulse_Guide: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Telescope_Declination_Rate: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Telescope_Does_Refraction: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Telescope_Equatorial_System: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Telescope_Focal_Length: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Telescope_Tracking_Rate: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Telescope_Tracking: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Telescope_Target_Right_Ascension: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Telescope_Target_Declination: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Telescope_Slew_Settle_Time: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Telescope_Slewing: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Telescope_Site_Longitude: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Telescope_Can_Park: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Telescope_Site_Latitude: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Telescope_Sidereal_Time: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Telescope_Side_of_Pier: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Telescope_Right_Ascension_Rate: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Telescope_Right_Ascension: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Telescope_Is_Pulse_Guiding: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Telescope_Guide_Rate_Right_Ascension: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Telescope_Guide_Rate_Declination: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Telescope_Site_Elevation: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Telescope_Can_Find_Home: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Telescope_UTCDATE: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Telescope_At_Park: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Telescope_At_Home: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Telescope_Aperture_Diameter: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Telescope_Aperture_Area: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Telescope_Altitude: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Telescope_Alignment_Mode: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Telescope_Interface_Version: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Telescope_Driver_Version: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Telescope_Connected: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Telescope_Tracking_Rates: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Telescope_Abort_Slew: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Telescope_Action: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Telescope_Axis_Rates: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Telescope_Can_Move_Axis: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Telescope_Command_Blind: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Telescope_Command: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Telescope_Destination_Side_of_Pier: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Telescope_Dispose: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Telescope_Find_Home: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Telescope_Move_Axis: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Telescope_Park: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Telescope_Pulse_Guide: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Telescope_Set_Park: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Telescope_Setup_Dialog: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Telescope_Slew_to_AltAz: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Telescope_Slew_to_AltAz_Async: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Telescope_Slew_to_Coordinates: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Telescope_Slew_to_Coordinates_Async: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Telescope_Slew_to_Target: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Telescope_Slew_to_Target_Async: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Telescope_Sync_to_AltAz: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Telescope_Sync_to_Coordinates: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Telescope_Sync_to_Target: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Telescope_Unpark: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Telescope_Altitude_to_Controller_Heartbest: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		case Telescope_Azimuth_to_Controller_Heartbeat: {
-			parameter_one = 0;
-			parameter_two = 0;
-			break;
-		}
-		}		// end of switch
-		if (command_number != (unsigned char)command_number) {
-			if (command_sent == false) {
-				Serial.print(millis(), DEC); Serial.print("\tSending ");
-				if (motor == SOURCE_ALTITUDE_MOTOR) {
-					Serial.print("the Altitude the Command: ");
-				}
-				else if (motor == SOURCE_AZIMUTH_MOTOR) {
-					Serial.print("the Azimuth the Command: ");
-				}
-				else if (motor == SOURCE_BOTH_MOTORS) {
-					Serial.print("both Motors the Command: ");
-				}
-				Serial.print(command_number, DEC);
-				Serial.print(", Source: "); Serial.print(source, DEC);
-				Serial.print(" Parameter One: "); Serial.print(parameter_one, DEC);
-				Serial.print(", Parameter Two: "); 	Serial.println(parameter_two, DEC);
-				Prepare_Packet_for_Output(source, command_number, parameter_one, parameter_two);
-				Send_Packet_to_Telescope((unsigned char)motor);
-				command_sent = true;
-			}
-		}
-#endif	//--End of Debug ---------------------------------------------------------------------------------------------------------------------------
-	}
 } // end of main loop
-// Controller Functions -------------------------------------------------------------------------------------
-void Update_datetime(void) {
+// Update Date and Time from the Focuser --------------------------------------------------------------------
+void Update_Datetime(void) {
+	unsigned char source = (unsigned char)SOURCE_HUB;
+	unsigned char command_number = 0;
+	double parameter_one = 0;
+	double parameter_two = 0;
 	if ((millis() >= last_datetime + (long)60000) || date_stage != (int)stage_wait_complete) {				// get the date and time from the controller every minute
-		if (date_stage == (int)stage_wait_complete) date_stage = (int)stage_day_month;
+		if (date_stage == (int)stage_wait_complete) date_stage = (int)stage_year_month;
 		last_datetime = millis();
-#ifdef MONITOR_PRINT_DATETIME
-		Serial.print(millis(), DEC); Serial.println("\tRequesting Time and Date");
-#endif
-#ifdef MONITOR_DUMMY_DATETIME
-		date_stage = (unsigned char)stage_wait_complete;
-		system_day = 1;
-		system_month = 1;
-		system_year = 2019;
-		system_hour = 9;
-		system_minute = 30;
-		system_second = 55;
-#else
-		unsigned char source = (unsigned char)SOURCE_HUB;
-		unsigned char command_number = 0;
-		double parameter_one = 0;
-		double parameter_two = 0;
+		Serial.print(millis(), DEC); Serial.print("\tRequesting Time and Date. Stage:"); Serial.println(date_stage, DEC);
 		switch (date_stage) {
 		case 0: {											// day and month required
-#ifdef MONITOR_PRINT_DATETIME
-			Serial.print(millis(), DEC); Serial.println("\tRequesting Day and Month");
-#endif
-			command_number = (unsigned char)HUB_Get_Day_Month;
+			Serial.print(millis(), DEC); Serial.println("\tRequesting Year and Month");
+			command_number = (unsigned char)HUB_Get_Year_Month;
 			Prepare_Packet_for_Output(source, command_number, parameter_one, parameter_two);
-			Send_Packet_to_Controller();
-			date_stage = (int)stage_wait_day_month;
+			Send_Packet_to_Focuser();
+			date_stage = (int)stage_wait_year_month;
 			break;
 		}
-		case (int)stage_wait_day_month: {					// do nothing, waiting for day and month
+		case (int)stage_wait_year_month: {					// do nothing, waiting for day and month
 			break;
 		}
-		case (int)stage_year_hour: {						// year and hour required
-#ifdef MONITOR_PRINT_DATETIME
-			Serial.print(millis(), DEC); Serial.println("\tRequesting Year and Hour");
-#endif
-			command_number = (unsigned char)HUB_Get_Year_Hour;
+		case (int)stage_day_hour: {						// year and hour required
+			Serial.print(millis(), DEC); Serial.println("\tRequesting Day and Hour");
+			command_number = (unsigned char)HUB_Get_Day_Hour;
 			Prepare_Packet_for_Output(source, command_number, parameter_one, parameter_two);
-			Send_Packet_to_Controller();
-			date_stage = (int)stage_wait_year_hour;
+			Send_Packet_to_Focuser();
+			date_stage = (int)stage_wait_day_hour;
 			break;
 		}
-		case (int)stage_wait_year_hour: {					// do nothing, waiting for year and hour
+		case (int)stage_wait_day_hour: {					// do nothing, waiting for year and hour
 			break;
 		}
 		case (int)stage_minute_second: {					// minute and second required
-#ifdef MONITOR_PRINT_DATETIME
 			Serial.print(millis(), DEC); Serial.println("\tRequesting Minute and Second");
-#endif
 			command_number = (unsigned char)HUB_Get_Minute_Second;
 			Prepare_Packet_for_Output(source, command_number, parameter_one, parameter_two);
 			Send_Packet_to_Controller();
@@ -1126,11 +315,8 @@ void Update_datetime(void) {
 			break;
 		}
 		}
-#ifdef MONITOR_PRINT_DATETIME
 		Serial.print(millis(), DEC); Serial.println("\tRequested Time and Date");
-#endif
 	}
-#endif
 }
 void Clear_LEDS(void) {
 	if ((Red_LED_State == true) && (millis() >= (Red_LED_Time_On + (unsigned long) LED_FLASH_TIME))) Turn_Red_LED(false);
@@ -1241,9 +427,7 @@ void serialEvent3() {
 }
 // Write Logger ---------------------------------------------------------------------------------------------
 void write_logger(unsigned char packet_type, unsigned char direction, unsigned char source, unsigned char command_number, double parameter_one, double parameter_two) {
-#ifdef MONITOR_PRINT_LOGGER
 	Serial.print(millis(), DEC); Serial.println("\tWriting Log Message");
-#endif
 	char temp_str[2];
 	int i,x;
 	String Logger_Message = "";
@@ -1294,11 +478,11 @@ void write_logger(unsigned char packet_type, unsigned char direction, unsigned c
 		Logger_Message += "Controller ";				// dd/mm/yy hh:mm:ss TO Controller 
 		break;
 	}
-	case SOURCE_ALTITUDE_MOTOR: {
+	case SOURCE_ALTITUDE: {
 		Logger_Message += "Altitude Motor";
 		break;
 	}
-	case SOURCE_AZIMUTH_MOTOR: {
+	case SOURCE_AZIMUTH: {
 		Logger_Message += "Azimuth Motor";
 		break;
 	}
@@ -1306,7 +490,7 @@ void write_logger(unsigned char packet_type, unsigned char direction, unsigned c
 		Logger_Message += "Focuser";
 		break;
 	}
-	case SOURCE_BOTH_MOTORS: {
+	case SOURCE_ALTAZI: {
 		Logger_Message += "Both Motors";
 		break;
 	}
@@ -1354,272 +538,30 @@ void Process_Incoming_Packet_from_Telescope(unsigned char motor) {// process an 
 	int command_number = 0;
 	double parameter_one = 0;
 	double parameter_two = 0;
+	bool forward_packet = true;
 	Turn_Green_LED(true);
-	if (motor == (unsigned char)SOURCE_AZIMUTH_MOTOR) {
-		write_logger((unsigned char)NULL,(unsigned char)FROM, (unsigned char)SOURCE_ALTITUDE_MOTOR, (unsigned char)command_number, parameter_one, parameter_two);
-		Altitude_Incoming_Message_Available = false;
-		command_number = (int) Incoming_Message_from_Azimuth.contents.command_number;
+	if (motor == (unsigned char)SOURCE_AZIMUTH) {
+		write_logger((unsigned char)NULL, (unsigned char)FROM, (unsigned char)SOURCE_AZIMUTH, (unsigned char)command_number, parameter_one, parameter_two);
+		Azimuth_Incoming_Message_Available = false;
+		command_number = (int)Incoming_Message_from_Azimuth.contents.command_number;
 		parameter_one = Incoming_Message_from_Azimuth.contents.parameter_one;
-		parameter_two =  Incoming_Message_from_Azimuth.contents.parameter_two;
-#ifdef MONITOR_PRINT_MOTOR_DRIVERS
-		Serial.print(millis(), DEC); Serial.print("\tPacket Received from Altitude Motor: ");
-		Serial.print("Command: "); Serial.print(command_number, DEC);
-		Serial.print(" Parameter_one: "); Serial.print(parameter_one, DEC);
-		Serial.print(" Parameter_two: "); Serial.print(parameter_two, DEC);
-#endif
-		telescope_count++;
-		if (telescope_count > (unsigned char)99) telescope_count = 0;
+		parameter_two = Incoming_Message_from_Azimuth.contents.parameter_two;
+		Serial.print(millis(), DEC); Serial.print("\tPacket Received from Azimuth Motor: ");
 	}
 	else {
-		write_logger((unsigned char)NULL,(unsigned char)FROM, (unsigned char)SOURCE_AZIMUTH_MOTOR, (unsigned char)command_number, parameter_one, parameter_two);
-		Azimuth_Incoming_Message_Available = false;
-#ifdef MONITOR_PRINT_MOTOR_DRIVERS
-		Serial.print(millis(), DEC); Serial.println("\tPacket Received from Azimuth Motor");
-#endif
+		write_logger((unsigned char)NULL, (unsigned char)FROM, (unsigned char)SOURCE_ALTITUDE, (unsigned char)command_number, parameter_one, parameter_two);
+		Altitude_Incoming_Message_Available = false;
 		command_number = Incoming_Message_from_Altitude.contents.command_number;
 		parameter_one = Incoming_Message_from_Altitude.contents.parameter_one;
 		parameter_two = Incoming_Message_from_Altitude.contents.parameter_two;
-		telescope_count++;
-		if (telescope_count > (unsigned char)99) telescope_count = 0;
+		Serial.print(millis(), DEC); Serial.print("\tPacket Received from Altitude Motor");
 	}
-	switch (command_number) {							// take any necessary HUB action, none normally required
-		case  Telescope_Azimuth:
-		case  Telescope_Declination:
-		case  Telescope_Can_Unpark:
-		case  Telescope_Can_Sync_AltAz:
-		case  Telescope_Can_Sync:
-		case  Telescope_Can_Slew_Async:
-		case  Telescope_Can_Slew_AltAz_Async:
-		case  Telescope_Can_Slew_AltAz:
-		case  Telescope_Can_Slew:
-		case  Telescope_Can_Set_Tracking:
-		case  Telescope_Can_Set_Right_Ascension_Rate:
-		case  Telescope_Can_Set_Pier_Side:
-		case  Telescope_Can_Set_Park:
-		case  Telescope_Can_Set_Guide_Rates:
-		case  Telescope_Can_Set_Declination_Rate:
-		case  Telescope_Can_Pulse_Guide:
-		case  Telescope_Declination_Rate:
-		case  Telescope_Does_Refraction:
-		case  Telescope_Equatorial_System:
-		case  Telescope_Focal_Length:
-		case  Telescope_Tracking_Rate:
-		case  Telescope_Tracking:
-		case  Telescope_Target_Right_Ascension:
-		case  Telescope_Target_Declination:
-		case  Telescope_Slew_Settle_Time:
-		case  Telescope_Slewing:
-		case  Telescope_Site_Longitude:
-		case  Telescope_Can_Park:
-		case  Telescope_Site_Latitude:
-		case  Telescope_Sidereal_Time:
-		case  Telescope_Side_of_Pier:
-		case  Telescope_Right_Ascension_Rate:
-		case  Telescope_Right_Ascension:
-		case  Telescope_Is_Pulse_Guiding:
-		case  Telescope_Guide_Rate_Right_Ascension:
-		case  Telescope_Guide_Rate_Declination:
-		case  Telescope_Site_Elevation:
-		case  Telescope_Can_Find_Home:
-		case  Telescope_UTCDATE:
-		case  Telescope_At_Park:
-		case  Telescope_At_Home:
-		case  Telescope_Aperture_Diameter:
-		case  Telescope_Aperture_Area:
-		case  Telescope_Altitude:
-		case  Telescope_Alignment_Mode:
-		case  Telescope_Interface_Version:
-		case  Telescope_Driver_Version:
-		case  Telescope_Connected:
-		case  Telescope_Tracking_Rates:
-		case  Telescope_Abort_Slew:
-		case  Telescope_Action:
-		case  Telescope_Axis_Rates:
-		case  Telescope_Can_Move_Axis:
-		case  Telescope_Command_Blind:
-		case  Telescope_Command:
-		case  Telescope_Destination_Side_of_Pier:
-		case  Telescope_Dispose:
-		case  Telescope_Find_Home:
-		case  Telescope_Move_Axis:
-		case  Telescope_Park:
-		case  Telescope_Pulse_Guide:
-		case  Telescope_Set_Park:
-		case  Telescope_Setup_Dialog:
-		case  Telescope_Slew_to_AltAz:
-		case  Telescope_Slew_to_AltAz_Async:
-		case  Telescope_Slew_to_Coordinates:
-		case  Telescope_Slew_to_Coordinates_Async:
-		case  Telescope_Slew_to_Target:
-		case  Telescope_Slew_to_Target_Async:
-		case  Telescope_Sync_to_AltAz:
-		case  Telescope_Sync_to_Coordinates:
-		case  Telescope_Sync_to_Target:
-		case  Telescope_Unpark:
-			Prepare_Packet_for_Output((unsigned char) motor,(unsigned char)command_number,(double)parameter_one,(double)parameter_two);
-			Send_Packet_to_Controller();
-#ifdef MONITOR_PRINT_MOTOR_DRIVERS
-			Serial.print(millis(), DEC); Serial.println("\tPacket Sent to Controller");
-#endif
-			break;
-	}
-}
-// Process Incoming Packet from the Focuser -----------------------------------------------------------------
-void Process_Incoming_Packet_from_Focuser() {                                       // process an update message from the Focuser
-	int command_number = 0;
-	double parameter_one = 0;
-	double parameter_two = 0;
-	Turn_Orange_LED(true);
-	Focuser_Incoming_Message_Available = false;
-	write_logger((unsigned char)NULL,(unsigned char)FROM, (unsigned char)SOURCE_FOCUSER, (unsigned char)command_number, parameter_one, parameter_two);
-	command_number = (int)Incoming_Message_from_Focuser.contents.command_number;
-	parameter_one = Incoming_Message_from_Focuser.contents.parameter_one;
-	parameter_two = Incoming_Message_from_Focuser.contents.parameter_two;
-#ifdef MONITOR_PRINT_FOCUSER
-	Serial.print(millis(), DEC); Serial.print("\tPacket Received from Focuser: Command: "); Serial.print(command_number, DEC);
-	Serial.print(" Parameter_one: "); Serial.print(parameter_one, DEC);
-	Serial.print(" Parameter_two: ");Serial.println(parameter_two, DEC);
-#endif
-	focuser_count++;
-	if (focuser_count > 99) focuser_count = 0;
-	switch (command_number) {
-		case Focuser_Current_Focuser_Position:
-		case Focuser_Motor_Moving_Status:
-		case Focuser_Motor_Controller_Status:
-		case Focuser_Firmware_Version_String:
-		case Focuser_Firmware_Name_and_Version_String:
-		case Focuser_Temperature:
-		case Focuser_Maximum_Step:	
-		case Focuser_Maximum_Increment:
-		case Focuser_Coil_Power:				
-		case Focuser_Motor_Speed:
-		case Focuser_Display_Unit:
-		case Focuser_User_Specified_Step_Size:
-		case Focuser_Step_Size:
-		case Focuser_Temperature_Coefficient:
-		case Focuser_Temperature_Compensation:
-		case Focuser_Temperature_Compensation_Enabled:
-		case Focuser_Move_to_Position:
-		case Focuser_Step_Mode:
-		case Focuser_Step_Size_Enabled:
-		case Focuser_Display:
-		case Focuser_Temperature_Mode:
-		case Focuser_Reset_Arduino_Controller:
-		case Focuser_Reset_Focuser_Defaults:
-		case Focuser_Motor_Speed_Threshold_When_Moving:
-		case Focuser_Motor_Speed_Change_When_Moving:
-		case Focuser_Save_Settings_to_EEPROM:
-		case Focuser_Humidity:
-		case Focuser_Longitude:
-		case Focuser_Latitude:
-		case Focuser_Altitude:
-		case Focuser_Voltages:
-		case Focuser_Update_of_Position_When_Moving:
-		case Focuser_Status_of_Home_Position_Switch:
-		case Focuser_Jogging_Steps:
-		case Focuser_Jogging_State:
-		case Focuser_Jogging_Direction:
-		case Focuser_Delay_After_Move:
-		case Focuser_Backlash_In:
-		case Focuser_Backlash_Out:
-		case Focuser_Number_of_Backlash_Steps_In:
-		case Focuser_Number_of_Backlash_Steps_Out:
-		case Focuser_Temperature_Compensation_Direction:
-		case Focuser_to_Controller_Heartbeat:
-		default:
-			Prepare_Packet_for_Output((unsigned char)SOURCE_FOCUSER, (unsigned char)command_number, (double)parameter_one, (double)parameter_two);
-			Send_Packet_to_Controller();
-#ifdef MONITOR_PRINT_FOCUSER
-			Serial.print(millis(), DEC); Serial.println("\tPacket Sent to Controller");
-#endif
-			break;
-	}
-}
-// Process Incoming Packet from the Controller --------------------------------------------------------------
-void Process_Incoming_Packet_from_Controller() {
-	int command_number = 0;
-	double parameter_one = 0;
-	double parameter_two = 0;
-	Turn_Red_LED(true);
-	command_number = (int)Incoming_Message_from_Controller.contents.command_number;
-	parameter_one = Incoming_Message_from_Controller.contents.parameter_one;
-	parameter_two = Incoming_Message_from_Controller.contents.parameter_two;
-#ifdef MONITOR_PRINT_CONTROLLER
-	Serial.print(millis(), DEC); Serial.print("\tPacket Received from Controller: ");
 	Serial.print("Command: "); Serial.print(command_number, DEC);
 	Serial.print(" Parameter_one: "); Serial.print(parameter_one, DEC);
-	Serial.print(" Parameter_two: "); Serial.print(parameter_two, DEC);
-#endif
-	controller_count++;
-	if (controller_count > 99) controller_count = 0;
-	switch (command_number) {
-	case HUB_Display: {
-		hub_display_state = (bool)Incoming_Message_from_Controller.contents.parameter_one;
-		break;
-	}
-	case HUB_Get_Day_Month: {
-		system_day = (long)parameter_one;
-		system_month = (long)parameter_two;
-		date_stage = (int)stage_year_hour;
-		break;
-	}
-	case HUB_Get_Year_Hour: {
-		system_year = (long)parameter_one;
-		system_hour = (long)parameter_two;
-		date_stage = (int)stage_minute_second;
-		break;
-	}
-	case HUB_Get_Minute_Second: {
-		system_minute = (long)parameter_one;
-		system_second = (long)parameter_two;
-		date_stage = (int)stage_wait_complete;
-		break;
-	}
-	case HUB_Delete_Log_File: {
-		write_logger((unsigned char)HUB_Delete_Log_File, (unsigned char)NULL, (unsigned char)SOURCE_CONTROLLER, (unsigned char)HUB_Delete_Log_File, (double)NULL, (double)NULL);
-		break;
-	}
-	case Focuser_Current_Focuser_Position:
-	case Focuser_Motor_Moving_Status:
-	case Focuser_Motor_Controller_Status:
-	case Focuser_Target_Position:
-	case Focuser_Temperature:
-	case Focuser_Maximum_Step:
-	case Focuser_Maximum_Increment:
-	case Focuser_Coil_Power:
-	case Focuser_Motor_Speed:
-	case Focuser_Display_Unit:
-	case Focuser_User_Specified_Step_Size:
-	case Focuser_Step_Size:
-	case Focuser_Temperature_Coefficient:
-	case Focuser_Temperature_Compensation:
-	case Focuser_Temperature_Compensation_Enabled:
-	case Focuser_Move_to_Position:
-	case Focuser_Step_Mode:
-	case Focuser_Step_Size_Enabled:
-	case Focuser_Temperature_Mode:
-	case Focuser_Reset_Arduino_Controller:
-	case Focuser_Reset_Focuser_Defaults:
-	case Focuser_Motor_Speed_Threshold_When_Moving:
-	case Focuser_Motor_Speed_Change_When_Moving:
-	case Focuser_Save_Settings_to_EEPROM:
-	case Focuser_Humidity:
-	case Focuser_Longitude:
-	case Focuser_Latitude:
-	case Focuser_Altitude:
-	case Focuser_Voltages:
-	case Focuser_Update_of_Position_When_Moving:
-	case Focuser_Status_of_Home_Position_Switch:
-	case Focuser_Jogging_Steps:
-	case Focuser_Jogging_State:
-	case Focuser_Jogging_Direction:
-	case Focuser_Delay_After_Move:
-	case Focuser_Backlash_In:
-	case Focuser_Backlash_Out:
-	case Focuser_Number_of_Backlash_Steps_In:
-	case Focuser_Number_of_Backlash_Steps_Out:
-	case Focuser_Temperature_Compensation_Direction:
-	case Telescope_UTCDATE:
+	Serial.print(" Parameter_two: "); Serial.println(parameter_two, DEC);
+	telescope_packet_count++;
+	if (telescope_packet_count > (unsigned char)99) telescope_packet_count = 0;
+	switch (command_number) {							// take any necessary HUB action, none normally required
 	case Telescope_Azimuth:
 	case Telescope_Declination:
 	case Telescope_Can_Unpark:
@@ -1642,14 +584,15 @@ void Process_Incoming_Packet_from_Controller() {
 	case Telescope_Focal_Length:
 	case Telescope_Tracking_Rate:
 	case Telescope_Tracking:
-	case Telescope_Target_Right_Ascension:
-	case Telescope_Target_Declination:
+	case Telescope_Future_Target_Right_Ascension:
+	case Telescope_Future_Target_Declination:
 	case Telescope_Slew_Settle_Time:
 	case Telescope_Slewing:
 	case Telescope_Site_Longitude:
 	case Telescope_Can_Park:
 	case Telescope_Site_Latitude:
-	case Telescope_Sidereal_Time:
+	case Telescope_Sidereal_Time_Hours:
+	case Telescope_Sidereal_Time_Minutes_Seconds:
 	case Telescope_Side_of_Pier:
 	case Telescope_Right_Ascension_Rate:
 	case Telescope_Right_Ascension:
@@ -1658,21 +601,31 @@ void Process_Incoming_Packet_from_Controller() {
 	case Telescope_Guide_Rate_Declination:
 	case Telescope_Site_Elevation:
 	case Telescope_Can_Find_Home:
+	case Telescope_UTCDATE_Year_Month:
+	case Telescope_UTCDATE_Day_Hour:
+	case Telescope_UTCDATE_Minute_Second:
 	case Telescope_At_Park:
 	case Telescope_At_Home:
 	case Telescope_Aperture_Diameter:
 	case Telescope_Aperture_Area:
 	case Telescope_Altitude:
 	case Telescope_Alignment_Mode:
+	case Telescope_Array_List:
+	case Telescope_Name:
 	case Telescope_Interface_Version:
 	case Telescope_Driver_Version:
+	case Telescope_Driver_Info:
+	case Telescope_Description:
 	case Telescope_Connected:
-	case Telescope_Tracking_Rates:
+	case Telescope_Tracking_Rates_0_1:
+	case Telescope_Tracking_Rates_2_3:
+	case Telescope_Abort_Slew:
 	case Telescope_Action:
 	case Telescope_Axis_Rates:
 	case Telescope_Can_Move_Axis:
 	case Telescope_Command_Blind:
-	case Telescope_Command:
+	case Telescope_Command_Bool:
+	case Telescope_Command_String:
 	case Telescope_Destination_Side_of_Pier:
 	case Telescope_Dispose:
 	case Telescope_Find_Home:
@@ -1691,22 +644,425 @@ void Process_Incoming_Packet_from_Controller() {
 	case Telescope_Sync_to_Coordinates:
 	case Telescope_Sync_to_Target:
 	case Telescope_Unpark:
+	case Telescope_Altitude_to_Controller_Heartbeat:
+	case Telescope_Azimuth_to_Controller_Heartbeat:
+	case Telescope_Get_Year_Month:
+	case Telescope_Get_Day_Hour:
+	case Telescope_Get_Minute_Second:
+	case Telescope_Display_Visible:
+	case Telescope_Command_Error_Response:
 	default:
-		Prepare_Packet_for_Output((unsigned char)SOURCE_CONTROLLER, (unsigned char)command_number, (double)parameter_one, (double)parameter_two);
-		if ((command_number > Focuser_Start) && (command_number < Focuser_End)) {
-			Send_Packet_to_Focuser();
-#ifdef MONITOR_PRINT_FOCUSER
-			Serial.print(millis(), DEC); Serial.println("\tPacket Sent to Focuser");
-#endif
-		}
-		else if ((command_number > Telescope_Start) && (command_number < Telescope_End)) {
-			Send_Packet_to_Telescope(SOURCE_BOTH_MOTORS);
-#ifdef MONITOR_PRINT_FOCUSER
-			Serial.print(millis(), DEC); Serial.println("\tPacket Sent to Both Motors");
-#endif
-		}
-		write_logger((unsigned char)NULL, (unsigned char)FROM, (unsigned char)SOURCE_CONTROLLER, (unsigned char)command_number, parameter_one, parameter_two);
+		break;
 	}
+	if (forward_packet == true) {
+		Prepare_Packet_for_Output((unsigned char)motor, (unsigned char)command_number, (double)parameter_one, (double)parameter_two);
+		Send_Packet_to_Controller();
+		Serial.print(millis(), DEC); Serial.println("\tPacket Sent to Controller");
+	}
+}
+// Process Incoming Packet from the Focuser -----------------------------------------------------------------
+void Process_Incoming_Packet_from_Focuser() {                   // process an update message from the Focuser
+	int command_number = 0;
+	double parameter_one = 0;
+	double parameter_two = 0;
+	bool reply = true;
+	Turn_Orange_LED(true);
+	Focuser_Incoming_Message_Available = false;
+	write_logger((unsigned char)NULL,(unsigned char)FROM, (unsigned char)SOURCE_FOCUSER, (unsigned char)command_number, parameter_one, parameter_two);
+	command_number = (int)Incoming_Message_from_Focuser.contents.command_number;
+	parameter_one = Incoming_Message_from_Focuser.contents.parameter_one;
+	parameter_two = Incoming_Message_from_Focuser.contents.parameter_two;
+	Serial.print(millis(), DEC); Serial.print("\tPacket Received from Focuser: Command: "); Serial.print(command_number, DEC);
+	Serial.print(" Parameter_one: "); Serial.print(parameter_one, DEC);
+	Serial.print(" Parameter_two: ");Serial.println(parameter_two, DEC);
+	focuser_packet_count++;
+	if (focuser_packet_count > 99) focuser_packet_count = 0;
+	switch (command_number) {
+	case HUB_Get_Year_Month:
+		system_year = parameter_one;
+		system_month = parameter_two;
+		reply = false;
+		break;
+	case HUB_Get_Day_Hour:
+		system_day = parameter_one;
+		system_hour = parameter_two;
+		reply = false;
+		break;
+	case HUB_Get_Minute_Second:
+		system_minute = parameter_one;
+		system_second = parameter_two;
+		reply = false;
+		break;
+	case Focuser_Current_Focuser_Position:
+		break;
+	case Focuser_Motor_Moving_Status:
+		break;
+	case Focuser_Is_Moving:
+		break;
+	case Focuser_Firmware_Version_String:
+		break;
+	case Focuser_Firmware_Name_and_Version_String:
+		break;
+	case Focuser_Maximum_Step:
+		break;
+	case Focuser_Maximum_Increment:
+		break;
+	case Focuser_Coil_Power:
+		break;
+	case Focuser_Motor_Speed:
+		break;
+	case Focuser_Step_Size:
+		break;
+	case Focuser_Temperature_Coefficient:
+		break;
+	case Focuser_Temperature_Compensation:
+		break;
+	case Focuser_Move_to_Position:
+		break;
+	case Focuser_Step_Mode:
+		break;
+	case Focuser_Step_Size_Enabled:
+		break;
+	case Focuser_Display_Visible:
+		break;
+	case Focuser_Temperature_Mode:
+		break;
+	case Focuser_Reset_Arduino_Controller:
+		break;
+	case Focuser_Reset_Focuser_Defaults:
+		break;
+	case Focuser_Motor_Speed_Threshold_When_Moving:
+		break;
+	case Focuser_Motor_Speed_Change_Enabled_When_Moving:
+		break;
+	case Focuser_Save_Settings_to_EEPROM:
+		break;
+	case Focuser_Humidity:
+		break;
+	case Focuser_Longitude:
+		break;
+	case Focuser_Latitude:
+		break;
+	case Focuser_Altitude:
+		break;
+	case Focuser_Voltages:
+		break;
+	case Focuser_Update_of_Position_When_Moving:
+		break;
+	case Focuser_Status_of_Home_Position_Switch:
+		break;
+	case Focuser_Jogging_Steps:
+		break;
+	case Focuser_Jogging_State:
+		break;
+	case Focuser_Jogging_Direction:
+		break;
+	case Focuser_Delay_After_Step:
+		break;
+	case Focuser_Backlash_In:
+		break;
+	case Focuser_Backlash_Out:
+		break;
+	case Focuser_Number_of_Backlash_Steps_In:
+		break;
+	case Focuser_Number_of_Backlash_Steps_Out:
+		break;
+	case Focuser_Temperature_Compensation_Direction:
+		break;
+	case Focuser_to_Controller_Heartbeat:
+		break;
+	default:
+		break;
+	}
+	if (reply == true) {
+		Prepare_Packet_for_Output((unsigned char)SOURCE_FOCUSER, (unsigned char)command_number, (double)parameter_one, (double)parameter_two);
+		Send_Packet_to_Controller();
+		Serial.print(millis(), DEC); Serial.println("\tPacket Sent to Controller");
+	}
+}
+// Process Incoming Packet from the Controller --------------------------------------------------------------
+void Process_Incoming_Packet_from_Controller() {
+	int command_number = 0;
+	double parameter_one = 0;
+	double parameter_two = 0;
+	Turn_Red_LED(true);
+	command_number = (int)Incoming_Message_from_Controller.contents.command_number;
+	parameter_one = Incoming_Message_from_Controller.contents.parameter_one;
+	parameter_two = Incoming_Message_from_Controller.contents.parameter_two;
+	Serial.print(millis(), DEC); Serial.print("\tPacket Received from Controller: ");
+	Serial.print("Command: "); Serial.print(command_number, DEC);
+	Serial.print(" Parameter_one: "); Serial.print(parameter_one, DEC);
+	Serial.print(" Parameter_two: "); Serial.println(parameter_two, DEC);
+	controller_packet_count++;
+	if (controller_packet_count > 99) controller_packet_count = 0;
+	switch (command_number) {
+		case HUB_Display_Visible: {			// (01)
+			hub_display_state = (bool)Incoming_Message_from_Controller.contents.parameter_one;
+			break;
+		}
+		case HUB_Delete_Log_File: {
+			write_logger((unsigned char)HUB_Delete_Log_File, (unsigned char)NULL, (unsigned char)SOURCE_CONTROLLER, (unsigned char)HUB_Delete_Log_File, (double)NULL, (double)NULL);
+			break;
+		}
+		case Focuser_Current_Focuser_Position:
+			break;
+		case Focuser_Motor_Moving_Status:
+			break;
+		case Focuser_Is_Moving:
+			break;        
+		case Focuser_Firmware_Version_String:
+			break;        
+		case Focuser_Firmware_Name_and_Version_String:
+			break;        
+		case Focuser_Target_Position:
+			break;        
+		case Focuser_Temperature:
+			break;        
+		case Focuser_Maximum_Step:
+			break;        
+		case Focuser_Maximum_Increment:
+			break;        
+		case Focuser_Coil_Power:
+			break;        
+		case Focuser_Motor_Speed:
+			break;        
+		case Focuser_Step_Size:
+			break;        
+		case Focuser_Temperature_Coefficient:
+			break;        
+		case Focuser_Temperature_Compensation:
+			break;        
+		case Focuser_Move_to_Position:
+			break;        
+		case Focuser_Step_Mode:
+			break;        
+		case Focuser_Step_Size_Enabled:
+			break;        
+		case Focuser_Display_Visible:
+			break;        
+		case Focuser_Temperature_Mode:
+			break;        
+		case Focuser_Reset_Arduino_Controller:
+			break;        
+		case Focuser_Reset_Focuser_Defaults:
+			break;        
+		case Focuser_Motor_Speed_Threshold_When_Moving:
+			break;        
+		case Focuser_Motor_Speed_Change_Enabled_When_Moving:
+			break;        
+		case Focuser_Save_Settings_to_EEPROM:
+			break;        
+		case Focuser_Humidity:
+			break;        
+		case Focuser_Longitude:
+			break;        
+		case Focuser_Latitude:
+			break;        
+		case Focuser_Altitude:
+			break;        
+		case Focuser_Voltages:
+			break;        
+		case Focuser_Controller_Current:
+			break;        
+		case Focuser_Update_of_Position_When_Moving:
+			break;        
+		case Focuser_Status_of_Home_Position_Switch:
+			break;        
+		case Focuser_Jogging_Steps:
+			break;        
+		case Focuser_Jogging_State:
+			break;        
+		case Focuser_Jogging_Direction:
+			break;        
+		case Focuser_Delay_After_Step:
+			break;        
+		case Focuser_Backlash_In:
+			break;        
+		case Focuser_Backlash_Out:
+			break;        
+		case Focuser_Number_of_Backlash_Steps_In:
+			break;        
+		case Focuser_Number_of_Backlash_Steps_Out:
+			break;        
+		case Focuser_Temperature_Compensation_Direction:
+			break;        
+		case Telescope_Azimuth:
+			break;        
+		case Telescope_Declination:
+			break;        
+		case Telescope_Can_Unpark:
+			break;        
+		case Telescope_Can_Sync_AltAz:
+			break;        
+		case Telescope_Can_Sync:
+			break;        
+		case Telescope_Can_Slew_Async:
+			break;        
+		case Telescope_Can_Slew_AltAz_Async:
+			break;        
+		case Telescope_Can_Slew_AltAz:
+			break;        
+		case Telescope_Can_Slew:
+			break;        
+		case Telescope_Can_Set_Tracking:
+			break;        
+		case Telescope_Can_Set_Right_Ascension_Rate:
+			break;        
+		case Telescope_Can_Set_Pier_Side:
+			break;        
+		case Telescope_Can_Set_Park:
+			break;        
+		case Telescope_Can_Set_Guide_Rates:
+			break;        
+		case Telescope_Can_Set_Declination_Rate:
+			break;        
+		case Telescope_Can_Pulse_Guide:
+			break;        
+		case Telescope_Declination_Rate:
+			break;        
+		case Telescope_Does_Refraction:
+			break;        
+		case Telescope_Equatorial_System:
+			break;        
+		case Telescope_Focal_Length:
+			break;        
+		case Telescope_Tracking_Rate:
+			break;        
+		case Telescope_Tracking:
+			break;        
+		case Telescope_Future_Target_Right_Ascension:
+			break;        
+		case Telescope_Future_Target_Declination:
+			break;        
+		case Telescope_Slew_Settle_Time:
+			break;        
+		case Telescope_Slewing:
+			break;        
+		case Telescope_Site_Longitude:
+			break;        
+		case Telescope_Can_Park:
+			break;        
+		case Telescope_Site_Latitude:
+			break;        
+		case Telescope_Sidereal_Time_Hours:
+			break;        
+		case Telescope_Sidereal_Time_Minutes_Seconds:
+			break;
+		case Telescope_Side_of_Pier:
+			break;        
+		case Telescope_Right_Ascension_Rate:
+			break;        
+		case Telescope_Right_Ascension:
+			break;        
+		case Telescope_Is_Pulse_Guiding:
+			break;        
+		case Telescope_Guide_Rate_Right_Ascension:
+			break;        
+		case Telescope_Guide_Rate_Declination:
+			break;        
+		case Telescope_Site_Elevation:
+			break;        
+		case Telescope_Can_Find_Home:
+			break;        
+		case Telescope_UTCDATE_Year_Month:
+			break;        
+		case Telescope_UTCDATE_Day_Hour:
+			break;        
+		case Telescope_UTCDATE_Minute_Second:
+			break;        
+		case Telescope_At_Park:
+			break;        
+		case Telescope_At_Home:
+			break;        
+		case Telescope_Aperture_Diameter:
+			break;        
+		case Telescope_Aperture_Area:
+			break;        
+		case Telescope_Altitude:
+			break;        
+		case Telescope_Alignment_Mode:
+			break;        
+		case Telescope_Array_List:
+			break;        
+		case Telescope_Name:
+			break;        
+		case Telescope_Interface_Version:
+			break;        
+		case Telescope_Driver_Version:
+			break;        
+		case Telescope_Driver_Info:
+			break;        
+		case Telescope_Description:
+			break;        
+		case Telescope_Connected:
+			break;        
+		case Telescope_Tracking_Rates_0_1:
+			break;        
+		case Telescope_Tracking_Rates_2_3:
+			break;
+	    case Telescope_Abort_Slew:
+			break;        
+		case Telescope_Action:
+			break;        
+		case Telescope_Axis_Rates:
+			break;        
+		case Telescope_Can_Move_Axis:
+			break;        
+		case Telescope_Command_Blind:
+			break;        
+		case Telescope_Command_Bool:
+			break;        
+		case Telescope_Command_String:
+			break;        
+		case Telescope_Destination_Side_of_Pier:
+			break;        
+		case Telescope_Dispose:
+			break;        
+		case Telescope_Find_Home:
+			break;        
+		case Telescope_Move_Axis:
+			break;        
+		case Telescope_Park:
+			break;        
+		case Telescope_Pulse_Guide:
+			break;        
+		case Telescope_Set_Park:
+			break;        
+		case Telescope_Setup_Dialog:
+			break;        
+		case Telescope_Slew_to_AltAz:
+			break;        
+		case Telescope_Slew_to_AltAz_Async:
+			break;        
+		case Telescope_Slew_to_Coordinates:
+			break;        
+		case Telescope_Slew_to_Coordinates_Async:
+			break;        
+		case Telescope_Slew_to_Target:
+			break;        
+		case Telescope_Slew_to_Target_Async:
+			break;        
+		case Telescope_Sync_to_AltAz:
+			break;        
+		case Telescope_Sync_to_Coordinates:
+			break;        
+		case Telescope_Sync_to_Target:
+			break;        
+		case Telescope_Unpark:
+			break;
+		default:
+			break;
+	}
+	Prepare_Packet_for_Output((unsigned char)SOURCE_CONTROLLER, (unsigned char)command_number, (double)parameter_one, (double)parameter_two);
+	if ((command_number > Focuser_Start) && (command_number < Focuser_End)) {
+			Send_Packet_to_Focuser();
+			Serial.print(millis(), DEC); Serial.println("\tPacket Sent to Focuser");
+		}
+	else if ((command_number > Telescope_Start) && (command_number < Telescope_End)) {
+		Send_Packet_to_Telescope(SOURCE_ALTAZI);
+		Serial.print(millis(), DEC); Serial.println("\tPacket Sent to Both Motors");
+	}
+	write_logger((unsigned char)NULL, (unsigned char)FROM, (unsigned char)SOURCE_CONTROLLER, (unsigned char)command_number, parameter_one, parameter_two);
 }
 // Process Packet for Output --------------------------------------------------------------------------------
 void Prepare_Packet_for_Output(byte source, byte command_number, double parameter_one, double parameter_two) {
@@ -1722,7 +1078,6 @@ void Send_Packet_to_Telescope(unsigned char motors) {
 	unsigned char command_number = Outgoing_Message_to_Motor_Drivers.contents.command_number;
 	double parameter_one = Outgoing_Message_to_Motor_Drivers.contents.parameter_one;
 	double parameter_two = Outgoing_Message_to_Motor_Drivers.contents.parameter_two;
-#ifdef MONITOR_PRINT_MOTOR_DRIVERS
 	Serial.print(millis(), DEC);
 	Serial.print("\tMotor Driver Message to be sent: "); 
 	for (int i = 0; i < Message_Structure_Length; i++) {
@@ -1732,48 +1087,36 @@ void Send_Packet_to_Telescope(unsigned char motors) {
 	Serial.println();
 	Serial.print(millis(), DEC);
 	Serial.print("\t");
-#endif
-#ifdef MONITOR_PRINT_MOTOR_DRIVERS
 	Serial.print("Message Sent to Motor Drivers ");
-#endif
+	telescope_packet_count++;
+	if (telescope_packet_count > 99) telescope_packet_count = 1;
 	for (int i = 0; i < Message_Structure_Length; i++) {
-#ifdef MONITOR_PRINT_MOTOR_DRIVERS
 		Serial.print(Outgoing_Message_to_Motor_Drivers.sg_chars[i], HEX);
 		Serial.print(",");
-#endif
-		if (motors == (unsigned char)SOURCE_ALTITUDE_MOTOR) {
-			write_logger((unsigned char)NULL,(unsigned char)TO, (unsigned char)SOURCE_ALTITUDE_MOTOR, command_number, parameter_one, parameter_two);
+		if (motors == (unsigned char)SOURCE_ALTITUDE) {
+			write_logger((unsigned char)NULL,(unsigned char)TO, (unsigned char)SOURCE_ALTITUDE, command_number, parameter_one, parameter_two);
 			altitude_serial.write(Outgoing_Message_to_Motor_Drivers.sg_chars[i]);
-			telescope_count++;
-			if (telescope_count > 99) telescope_count = 1;
 		}
-		if (motors == (unsigned char)SOURCE_AZIMUTH_MOTOR) {
-			write_logger((unsigned char)NULL,(unsigned char)TO, (unsigned char)SOURCE_AZIMUTH_MOTOR, command_number, parameter_one, parameter_two);
+		if (motors == (unsigned char)SOURCE_AZIMUTH) {
+			write_logger((unsigned char)NULL,(unsigned char)TO, (unsigned char)SOURCE_AZIMUTH, command_number, parameter_one, parameter_two);
 			azimuth_serial.write(Outgoing_Message_to_Motor_Drivers.sg_chars[i]);
-			telescope_count++;
-			if (telescope_count > 99) telescope_count = 1;
 		}
-		if (motors == (unsigned char)SOURCE_TELESCOPE) {
-			write_logger((unsigned char)NULL,(unsigned char)TO, (unsigned char)SOURCE_BOTH_MOTORS, command_number, parameter_one, parameter_two);
+		if (motors == (unsigned char)SOURCE_ALTAZI) {
+			write_logger((unsigned char)NULL,(unsigned char)TO, (unsigned char)SOURCE_ALTAZI, command_number, parameter_one, parameter_two);
 			altitude_serial.write(Outgoing_Message_to_Motor_Drivers.sg_chars[i]);
 			azimuth_serial.write(Outgoing_Message_to_Motor_Drivers.sg_chars[i]);
-			telescope_count++;
-			if (telescope_count > 99) telescope_count = 1;
 		}
 	}
-#ifdef MONITOR_PRINT_MOTOR_DRIVERS
 	Serial.println("");
-#endif
 }
 // Send Packet to Focuser -----------------------------------------------------------------------------------
 void Send_Packet_to_Focuser() {
 	unsigned char command_number = Outgoing_Message_to_Focuser.contents.command_number;
 	double parameter_one = Outgoing_Message_to_Focuser.contents.parameter_one;
 	double parameter_two = Outgoing_Message_to_Focuser.contents.parameter_two;
-	write_logger((unsigned char) 0,(unsigned char)TO, (unsigned char)SOURCE_FOCUSER, command_number, parameter_one, parameter_two);
-	focuser_count++;
-	if (focuser_count > 99) focuser_count = 1;
-#ifdef MONITOR_PRINT_FOCUSER
+	write_logger((unsigned char) SOURCE_CONTROLLER,(unsigned char)TO, (unsigned char)SOURCE_FOCUSER, command_number, parameter_one, parameter_two);
+	focuser_packet_count++;
+	if (focuser_packet_count > 99) focuser_packet_count = 1;
 	Serial.print(millis(), DEC);
 	Serial.print("\tFocuser Message to be sent: ");
 	for (int i = 0; i < Message_Structure_Length; i++) {
@@ -1782,13 +1125,10 @@ void Send_Packet_to_Focuser() {
 	}
 	Serial.println();
 	Serial.print("Message Sent to Focuser:");
-#endif
 	for (int i = 0; i < Message_Structure_Length; i++) {
 		focuser_serial.write(Outgoing_Message_to_Focuser.sg_chars[i]);
 	}
-#ifdef MONITOR_PRINT_FOCUSER
 	Serial.println("");
-#endif
 }
 // Send Packet to Congroller --------------------------------------------------------------------------------
 void Send_Packet_to_Controller() {
@@ -1864,13 +1204,13 @@ void send_update_to_SEVEN_SEGMENT() {
 	char displayfocuser_s[2];
 	if (hub_display_state == false) return;
 	String Display_String = "        ";
-	itoa((int)telescope_count, displaytelescope_s, 10);
+	itoa((int)telescope_packet_count, displaytelescope_s, 10);
 	Display_String = displaytelescope_s;
 	Display_String += '-';
-	itoa((int)controller_count, displaycontroller_s, 10);
+	itoa((int)controller_packet_count, displaycontroller_s, 10);
 	Display_String += displaycontroller_s;
 	Display_String += '-';
-	itoa((int)focuser_count, displayfocuser_s, 10);
+	itoa((int)focuser_packet_count, displayfocuser_s, 10);
 	Display_String += displayfocuser_s;
 	HUB_display(Display_String);
 #ifdef MONITOR_PRINT_SEVEN_SEGMENT
