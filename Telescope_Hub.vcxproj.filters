@@ -18,19 +18,16 @@
     <None Include="Telescope_Hub.ino" />
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="__vm\.Telescope_Hub.vsarduino.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
     <ClInclude Include="HUB_Commands.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="__vm\.HUB.vsarduino.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="..\..\..\Git\Telescope\Telescope_Hub\Seven_Segment_Display.h">
+    <ClInclude Include="__vm\.Telescope_Hub.vsarduino.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="Convert_RA_to_EQU.h">
+    <ClInclude Include="..\Common_Files\Telescope_Commands.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>

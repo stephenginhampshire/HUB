@@ -1,9 +1,18 @@
 ﻿
 Microsoft Visual Studio Solution File, Format Version 12.00
-# Visual Studio 15
-VisualStudioVersion = 15.0.27004.2008
+# Visual Studio Version 17
+VisualStudioVersion = 17.2.32505.173
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "Telescope_Hub", "Telescope_Hub.vcxproj", "{C5F80730-F44F-4478-BDAE-6634EFC2CA88}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "UDPSendReceiveString", "..\..\..\..\Documents\Arduino\My Examples\UDPSendReceiveString\UDPSendReceiveString.vcxproj", "{2181FCF6-E3B3-4076-9EE5-7A6F05763A88}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution Items", "{42FF0041-BE02-40C6-9E1E-9B8C2A40675F}"
+	ProjectSection(SolutionItems) = preProject
+		..\Common_Files\Telescope_Commands.h = ..\Common_Files\Telescope_Commands.h
+	EndProjectSection
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "Wire", "Libraries\Wire\Wire.vcxitems", "{172C9AA9-0638-4D09-8F1E-15DAD6BCA6A1}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -15,11 +24,19 @@ Global
 		{C5F80730-F44F-4478-BDAE-6634EFC2CA88}.Debug|x86.Build.0 = Debug|Win32
 		{C5F80730-F44F-4478-BDAE-6634EFC2CA88}.Release|x86.ActiveCfg = Release|Win32
 		{C5F80730-F44F-4478-BDAE-6634EFC2CA88}.Release|x86.Build.0 = Release|Win32
+		{2181FCF6-E3B3-4076-9EE5-7A6F05763A88}.Debug|x86.ActiveCfg = Debug|Win32
+		{2181FCF6-E3B3-4076-9EE5-7A6F05763A88}.Debug|x86.Build.0 = Debug|Win32
+		{2181FCF6-E3B3-4076-9EE5-7A6F05763A88}.Release|x86.ActiveCfg = Release|Win32
+		{2181FCF6-E3B3-4076-9EE5-7A6F05763A88}.Release|x86.Build.0 = Release|Win32
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
 		SolutionGuid = {DFB1A216-0EF0-4C6B-93FC-657FFF02D0C6}
+	EndGlobalSection
+	GlobalSection(SharedMSBuildProjectFiles) = preSolution
+		Libraries\Wire\Wire.vcxitems*{172c9aa9-0638-4d09-8f1e-15dad6bca6a1}*SharedItemsImports = 9
+		Libraries\Wire\Wire.vcxitems*{c5f80730-f44f-4478-bdae-6634efc2ca88}*SharedItemsImports = 4
 	EndGlobalSection
 EndGlobal
