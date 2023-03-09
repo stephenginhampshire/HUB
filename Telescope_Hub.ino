@@ -3,13 +3,7 @@
         interfaces Steve and Jamie Gould's Telescope to a PC ASCOM compliant software driver
         Declination = Altitude = north/south = up down
         Right Ascension = Azimuth  = east/west = left right
-        Communications to the three motor controllers is made through this HUB.
-        The HUB also drives an operator's panel with three push switches (with lights),
-            3 Seven Segment displays, one each for Altitude Motor, Azimuth Motor and Focuser
-            Motor, 12 LEDs, three sets of Red, Green, Blue and Yellow, a 4 x 20 characters/row
-            LCD display
-
-        Version 1.0 30/01/2018
+        Communications to the motor controllers is made through this HUB.
 */
 /* Version Control ------------------------------------------------------------------------------------------
     Version	Date		Description
@@ -20,9 +14,10 @@
     1.4     19/08/2022  Log File Support Added
     1.5     21/09/2022  Log File replaced with logging to serial line 4
     1.6     05/02/2023  Recommenced review
-    1.7     16/02/2023  Added Pseudo serial connector so that the Exerciser can emulate the PC_AP!
+    1.7     16/02/2023  Added Pseudo serial connector so that the Exerciser can emulate the PC_API
+    1.8     09/03/2023  Ability to selectively send heartbeat messages to the exerciser and/or the panel, they are always sent to PC_API
 */
-constexpr double Firmware_Version = (double)1.6;
+constexpr double Firmware_Version = (double)1.8;
 // Inclusions ---------------------------------------------------------------------------------------------------------
 #include <avr/wdt.h>
 #include <Bounce2.h>
@@ -37,6 +32,8 @@ constexpr double Firmware_Version = (double)1.6;
 #define USE_CONSOLE                   // output messages to console
 #define PRINT_RECEIVED
 #define PRINT_TRANSMITTED
+#define SEND_HEARTBEAT_TO_EXERCISER
+#define SEND_HEARTBEAT_TO_PANEL
 // Constants ----------------------------------------------------------------------------------------------------------
 constexpr int machine = axisTertiary;
 int freeMemory() {
@@ -51,7 +48,7 @@ constexpr int Altitude_baud = (int)38400;
 constexpr int Azimuth_baud = (int)38400;
 constexpr int Focuser_baud = (int)38400;
 constexpr int Panel_baud = (int)38400;
-constexpr int Emulator_baud = (int)38400;
+constexpr int Exerciser_baud = (int)38400;
 constexpr int Camera_baud = (int)38400;
 constexpr unsigned long Led_On_Time = (unsigned long)250;
 // Constants ------------------------------------------------------------------
@@ -79,8 +76,8 @@ constexpr byte TX_3_pin = 14;           // Focuser Port TX
 constexpr byte RX_3_pin = 15;           // Focuser Port RX 
 constexpr byte Panel_TX_pin = 12;       // Control Panel Port TX
 constexpr byte Panel_RX_pin = 13;       // Control Panel Port RX,10,11,12,13,14,15,50,51,52,53,A8(62),A9(63),A10(64),A11(65),A12(66),A13(67),A14(68),A15(69
-constexpr byte Emulator_TX_pin = 10;    // TX Port for incoming PC_API messages when not using Ethernet
-constexpr byte Emulator_RX_pin = 11;    // RX Port for incoming PC_API messages when not using Ethernet
+constexpr byte Exerciser_TX_pin = 10;    // TX Port for incoming PC_API messages when not using Ethernet
+constexpr byte Exerciser_RX_pin = 11;    // RX Port for incoming PC_API messages when not using Ethernet
 constexpr byte Camera_TX_pin = A8;      // TX Port fpr incoming Camera Packets
 constexpr byte Camera_RX_pin = A9;      // RX Port for incoming Camera Packets
 // --------------------------------------------------------------------------------------------------------------------
@@ -94,14 +91,14 @@ double Azimuth_Packets_Received = 0;
 double Focuser_Packets_Received = 0;
 double Panel_Packets_Received = 0;
 double PC_API_Packets_Received = 0;
-double Emulator_Packets_Received = 0;
+double Exerciser_Packets_Received = 0;
 double Camera_Packets_Received = 0;
 double Packets_Sent_to_Altitude = 0;
 double Packets_Sent_to_Azimuth = 0;
 double Packets_Sent_to_Focuser = 0;
 double Packets_Sent_to_PC_API = 0;
 double Packets_Sent_to_Panel = 0;
-double Packets_Sent_to_Emulator = 0;
+double Packets_Sent_to_Exerciser = 0;
 double Packets_Sent_to_Camera = 0;
 // byte messageBuffer[48]; // 48 byte array to hold incoming/outgoing NTP time messages
 // Instantiations -------------------------------------------------------------
@@ -109,7 +106,7 @@ HardwareSerial Altitude_Port = Serial1;                     // Altitude Port
 HardwareSerial Azimuth_Port = Serial2;                      // Azimuth Port
 HardwareSerial Focuser_Port = Serial3;                      // Focuser Port
 SoftwareSerial Panel_Port(Panel_RX_pin, Panel_TX_pin);   // Logge Port RX, TX
-SoftwareSerial Emulator_Port(Emulator_RX_pin, Emulator_TX_pin);
+SoftwareSerial Exerciser_Port(Exerciser_RX_pin, Exerciser_TX_pin);
 SoftwareSerial Camera_Port(Camera_RX_pin, Camera_TX_pin);
 EthernetServer PC_API_Port(80);                                  // Create a server listening on port 80.
 // Communications Variables ---------------------------------------------------
@@ -118,27 +115,27 @@ PacketUnion Incoming_Message_from_PC_API;
 PacketUnion Incoming_Message_from_Altitude;
 PacketUnion Incoming_Message_from_Focuser;
 PacketUnion Incoming_Message_from_Panel;
-PacketUnion Incoming_Message_from_Emulator;
+PacketUnion Incoming_Message_from_Exerciser;
 PacketUnion Incoming_Message_from_Camera;
 // PacketUnion Outgoing_Message_to_Azimuth;
 // PacketUnion Outgoing_Message_to_Altitude;
 // PacketUnion Outgoing_Message_to_Focuser;
 PacketUnion Outgoing_Message_to_PC_API;
 PacketUnion Outgoing_Message_to_Panel;
-PacketUnion Outgoing_Message_to_Emulator;
+PacketUnion Outgoing_Message_to_Exerciser;
 // PacketUnion Outgoing_Message_to_Camera;
 bool Altitude_Incoming_Message_Available = false;
 bool Azimuth_Incoming_Message_Available = false;
 bool Focuser_Incoming_Message_Available = false;
 bool PC_API_Incoming_Message_Available = false;
-bool Emulator_Incoming_Message_Available = false;
+bool Exerciser_Incoming_Message_Available = false;
 bool Panel_Incoming_Message_Available = false;
 bool Camera_Incoming_Message_Available = false;
 char Altitude_in_buffer_counter = 0;
 char Azimuth_in_buffer_counter = 0;
 char Focuser_in_buffer_counter = 0;
 char Control_panel_in_buffer_counter = 0;
-char Emulator_in_buffer_couner = 0;
+char Exerciser_in_buffer_couner = 0;
 char Camera_in_buffer_counter = 0;
 byte Altitude_inptr;					// must be 8 bit byte so that it overflows at 256
 byte Altitude_outptr;					// must be 8 bit byte so that it overflows at 256
@@ -156,10 +153,10 @@ byte Panel_inptr;					// must be 8 bit byte so that it overflows at 256
 byte Panel_outptr;					// must be 8 bit byte so that it overflows at 256
 unsigned char Panel_inbuffer[0xff];
 int Panel_string_ptr;
-byte Emulator_inptr;
-byte Emulator_outptr;
-int Emulator_string_ptr;
-unsigned char Emulator_inbuffer[0xff];
+byte Exerciser_inptr;
+byte Exerciser_outptr;
+int Exerciser_string_ptr;
+unsigned char Exerciser_inbuffer[0xff];
 byte Camera_inptr;					// must be 8 bit byte so that it overflows at 256
 byte Camera_outptr;					// must be 8 bit byte so that it overflows at 256
 unsigned char Camera_inbuffer[0xff];
@@ -180,8 +177,8 @@ void setup() {
     console_print("\tSetup Commenced");
 #endif
     PC_API_Port.begin();                                                 // Start Ethernet
-    Emulator_Port.begin(Emulator_baud);
-    Emulator_Port.flush();
+    Exerciser_Port.begin(Exerciser_baud);
+    Exerciser_Port.flush();
     Camera_Port.begin(Camera_baud);
     Camera_Port.flush();
     pinMode(Green_led_pin, OUTPUT);
@@ -211,7 +208,7 @@ void loop() {
     Maintain_Internet();
     Green_Led_Flash();                                                                      // toggle the green led
     if (Check_PC_API_Packet()) Process_Incoming_Packet_from_PC_API();
-    if (Check_Emulator_Packet()) Process_Incoming_Packet_from_Emulator();
+    if (Check_Exerciser_Packet()) Process_Incoming_Packet_from_Exerciser();
     if (Check_Altitude_Packet()) Process_Incoming_Packet_from_Altitude();
     if (Check_Azimuth_Packet()) Process_Incoming_Packet_from_Azimuth();
     if (Check_Focuser_Packet()) Process_Incoming_Packet_from_Focuser();
@@ -265,13 +262,17 @@ void Send_Heartbeat() {
     Outgoing_Message_to_PC_API.field.ParameterSix = PC_API_Packets_Received;        // [27 - 30]
     Outgoing_Message_to_PC_API.field.Footer;			                            // [31] ETX
     for (int i = 0; i <= packet_length; i++) {                                      // copy the input packet to the output packet buffer
-        Emulator_Port.write(Outgoing_Message_to_PC_API.character[i]);
         PC_API_Port.write(Outgoing_Message_to_PC_API.character[i]);
+#ifdef SEND_HEARTBEAT_TO_EXERCISER
+        Exerciser_Port.write(Outgoing_Message_to_PC_API.character[i]);
+#endif
+#ifdef SEND_HEARTBEAT_TO_PANEL
         Panel_Port.write(Outgoing_Message_to_PC_API.character[i]);
+#endif
     }
     Time_of_Last_Heartbeat = millis();
 #ifdef USE_CONSOLE
-    console_print("Heartbeat Transmtted");
+    console_print("Heartbeat Transmitted");
 #endif
 }
 bool Check_Panel_Packet(void) {
@@ -369,25 +370,25 @@ bool Check_Focuser_Packet(void) {
     } // end of while Focuser
     return Focuser_Incoming_Message_Available;
 }
-bool Check_Emulator_Packet(void) {
-    Emulator_Port.listen();
-    while (Emulator_outptr != Emulator_inptr) {											// check Focuser serial buffer for data
-        Hub_status.bit.Emulator = true;
-        char thisbyte = Emulator_inbuffer[Emulator_outptr++];								// take a characters from the input buffer and increment pointer
-        if ((thisbyte == (char)STX) && (Emulator_string_ptr == 0)) {						// look for the STX, but only if the output string is empty
-            Incoming_Message_from_Emulator.character[Emulator_string_ptr++] = STX;		// store the STX and increment the string pointer
-            Emulator_Incoming_Message_Available = false;
+bool Check_Exerciser_Packet(void) {
+    Exerciser_Port.listen();
+    while (Exerciser_outptr != Exerciser_inptr) {											// check Focuser serial buffer for data
+        Hub_status.bit.Exerciser = true;
+        char thisbyte = Exerciser_inbuffer[Exerciser_outptr++];								// take a characters from the input buffer and increment pointer
+        if ((thisbyte == (char)STX) && (Exerciser_string_ptr == 0)) {						// look for the STX, but only if the output string is empty
+            Incoming_Message_from_Exerciser.character[Exerciser_string_ptr++] = STX;		// store the STX and increment the string pointer
+            Exerciser_Incoming_Message_Available = false;
         }
         else {
             if (thisbyte == (char)ETX) {												// characters was not an STX check for ETX
-                Incoming_Message_from_Emulator.character[Emulator_string_ptr++] = ETX;     // save the ETX and increment the string pointer
-                if (Emulator_string_ptr == packet_length) {  // does it mean end of packet (we just saved the ETX at 20!
-                    Emulator_string_ptr = 0;												// zero the string pointer
-                    Emulator_Incoming_Message_Available = true;
+                Incoming_Message_from_Exerciser.character[Exerciser_string_ptr++] = ETX;     // save the ETX and increment the string pointer
+                if (Exerciser_string_ptr == packet_length) {  // does it mean end of packet (we just saved the ETX at 20!
+                    Exerciser_string_ptr = 0;												// zero the string pointer
+                    Exerciser_Incoming_Message_Available = true;
                 }
             }
             else {
-                Incoming_Message_from_Emulator.character[Emulator_string_ptr++] = thisbyte; // Not a valid STX or a valid ETX so save it and increment string pointer
+                Incoming_Message_from_Exerciser.character[Exerciser_string_ptr++] = thisbyte; // Not a valid STX or a valid ETX so save it and increment string pointer
             }
         }
     } // end of while Focuser
@@ -448,55 +449,87 @@ void Process_Incoming_Packet_from_Azimuth() {					            // process an upda
     Azimuth_Incoming_Message_Available = false;                             // clear the packet received flag
     Azimuth_Packets_Received++;                                             // increment the Aimuth packets received count
     for (int i = 0; i <= packet_length; i++) {                              // copy the received packet to the output devices
-        Emulator_Port.write(Incoming_Message_from_Azimuth.character[i]);    // send to the emulator
+        Exerciser_Port.write(Incoming_Message_from_Azimuth.character[i]);    // send to the emulator
         PC_API_Port.write(Incoming_Message_from_Azimuth.character[i]);      // else send to the PC_API
         Panel_Port.write(Incoming_Message_from_Azimuth.character[i]);       // also send to the Panel
     }
 #ifdef PRINT_RECEIVED
+#ifdef USE_CONSOLE
     console.print(millis(), DEC); console.println("\tPacket Received from Azimuth");
-    console.print("\t\tMessage Source: "); console.print(Device_Names[Incoming_Message_from_Azimuth.field.MessageSource]); // [1] source of message
-    console.print("\t\tMessage Target: "); console.print(Device_Names[Incoming_Message_from_Altitude.field.MessageTarget]); // [1] source of message
-    ***********************************************
-        byte MessageSource;     // [2]
-    byte CommandNumber;		// [3] command character
-    byte PacketType;		// [4]  
-    int CurrentStatus;		// [5 - 6]
-    double ParameterOne;	// [7 - 10]
-    double ParameterTwo;	// [11 - 14]
-    double ParameterThree;	// [15 - 18]
-    double ParameterFour;	// [19 - 22]
-    double ParameterFive;	// [23 - 26]
-    double ParameterSix;	// [27 - 30]
+    console.print("\t\tMessage Source: "); console.print(Device_Names[Incoming_Message_from_Azimuth.field.MessageSource]);  // [1] source of message
+    console.print("\t\tMessage Target: "); console.print(Device_Names[Incoming_Message_from_Azimuth.field.MessageTarget]); // [2] target of message
+    console.print("\t\tCommand Number: "); console.print(Device_Names[Incoming_Message_from_Azimuth.field.CommandNumber]); // [3] CommandNumber;
+    console.print("\t\tPacket Type: "); console.print(Device_Names[Incoming_Message_from_Azimuth.field.PacketType]);       // [4] PacketType;  
+    console.print("\t\tCurrent Status: "); console.print(Device_Names[Incoming_Message_from_Azimuth.field.CurrentStatus]); // [5 - 6] CurrentStatus;
+    console.print("\t\tParameter One: "); console.print(String(Incoming_Message_from_Azimuth.field.ParameterOne));         // [7 - 10] ParameterOne;
+    console.print("\t\tParameter Two: "); console.print(String(Incoming_Message_from_Azimuth.field.ParameterTwo));         // [11 - 14] ParameterTwo
+    console.print("\t\tParameter Three: "); console.print(String(Incoming_Message_from_Azimuth.field.ParameterThree));		// [15 - 18] ParameterThree;
+    console.print("\t\tParameter Four: "); console.print(String(Incoming_Message_from_Azimuth.field.ParameterFour));       // [19 - 22] ParameterFour;	
+    console.print("\t\tParameter Five: "); console.print(String(Incoming_Message_from_Azimuth.field.ParameterFive));       // [23 - 26]
+    console.print("\t\tParameter Six: "); console.print(String(Incoming_Message_from_Azimuth.field.ParameterSix));		    // [27 - 30]
+#endif
 #endif
 #ifdef USE_CONSOLE
-    console_print("\tPacket Received from Azimuth forwarded to PC_API, Emulator and Panel");
+    console_print("\tPacket Received from Azimuth forwarded to PC_API, Exerciser and Panel");
 #endif
 }
 void Process_Incoming_Packet_from_Altitude() {					            // process an update message from a motor driver
     Altitude_Incoming_Message_Available = false;                            // clear the packet received flag
     Altitude_Packets_Received++;                                            // increment the Altitude packets received count
     for (int i = 0; i <= packet_length; i++) {                              // copy the received packet to the output devices
-        Emulator_Port.write(Incoming_Message_from_Altitude.character[i]);   // send to the emulator
+        Exerciser_Port.write(Incoming_Message_from_Altitude.character[i]);   // send to the emulator
         PC_API_Port.write(Incoming_Message_from_Altitude.character[i]);     // also send to the PC_API
         Panel_Port.write(Incoming_Message_from_Altitude.character[i]);      // also send to the Panel
     }
+#ifdef PRINT_RECEIVED
 #ifdef USE_CONSOLE
-    console_print("\tPacket Received from Altitude forwarded to PC_API, Emulator and Panel");
+    console.print(millis(), DEC); console.println("\tPacket Received from Altitude");
+    console.print("\t\tMessage Source: "); console.print(Device_Names[Incoming_Message_from_Altitude.field.MessageSource]);  // [1] source of message
+    console.print("\t\tMessage Target: "); console.print(Device_Names[Incoming_Message_from_Altitude.field.MessageTarget]); // [2] target of message
+    console.print("\t\tCommand Number: "); console.print(Device_Names[Incoming_Message_from_Altitude.field.CommandNumber]); // [3] CommandNumber;
+    console.print("\t\tPacket Type: "); console.print(Device_Names[Incoming_Message_from_Altitude.field.PacketType]);       // [4] PacketType;  
+    console.print("\t\tCurrent Status: "); console.print(Device_Names[Incoming_Message_from_Altitude.field.CurrentStatus]); // [5 - 6] CurrentStatus;
+    console.print("\t\tParameter One: "); console.print(String(Incoming_Message_from_Altitude.field.ParameterOne));         // [7 - 10] ParameterOne;
+    console.print("\t\tParameter Two: "); console.print(String(Incoming_Message_from_Altitude.field.ParameterTwo));         // [11 - 14] ParameterTwo
+    console.print("\t\tParameter Three: "); console.print(String(Incoming_Message_from_Altitude.field.ParameterThree));		// [15 - 18] ParameterThree;
+    console.print("\t\tParameter Four: "); console.print(String(Incoming_Message_from_Altitude.field.ParameterFour));       // [19 - 22] ParameterFour;	
+    console.print("\t\tParameter Five: "); console.print(String(Incoming_Message_from_Altitude.field.ParameterFive));       // [23 - 26]
+    console.print("\t\tParameter Six: "); console.print(String(Incoming_Message_from_Altitude.field.ParameterSix));		    // [27 - 30]
+#endif
+#endif
+#ifdef USE_CONSOLE
+    console_print("\tPacket Received from Altitude forwarded to PC_API, Exerciser and Panel");
 #endif
 }
 void Process_Incoming_Packet_from_Focuser() {                               // process an update message from the Focuser
     Focuser_Incoming_Message_Available = false;                             // clear the packet received flag
     Focuser_Packets_Received++;                                             // increment the Focuser packets received count
     for (int i = 0; i <= packet_length; i++) {                              // copy the received packet to the output devices
-        Emulator_Port.write(Incoming_Message_from_Focuser.character[i]);    // send to the emulator
+        Exerciser_Port.write(Incoming_Message_from_Focuser.character[i]);    // send to the emulator
         PC_API_Port.write(Incoming_Message_from_Focuser.character[i]);      // also send to the PC_API
         Panel_Port.write(Incoming_Message_from_Focuser.character[i]);       // also send to the Panel
     }
+#ifdef PRINT_RECEIVED
 #ifdef USE_CONSOLE
-    console_print("\tPacket Received from Focuser forwarded to PC_API, Emulator and Panel");
+    console.print(millis(), DEC); console.println("\tPacket Received from Focuser");
+    console.print("\t\tMessage Source: "); console.print(Device_Names[Incoming_Message_from_Focuser.field.MessageSource]);  // [1] source of message
+    console.print("\t\tMessage Target: "); console.print(Device_Names[Incoming_Message_from_Focuser.field.MessageTarget]); // [2] target of message
+    console.print("\t\tCommand Number: "); console.print(Device_Names[Incoming_Message_from_Focuser.field.CommandNumber]); // [3] CommandNumber;
+    console.print("\t\tPacket Type: "); console.print(Device_Names[Incoming_Message_from_Focuser.field.PacketType]);       // [4] PacketType;  
+    console.print("\t\tCurrent Status: "); console.print(Device_Names[Incoming_Message_from_Focuser.field.CurrentStatus]); // [5 - 6] CurrentStatus;
+    console.print("\t\tParameter One: "); console.print(String(Incoming_Message_from_Focuser.field.ParameterOne));         // [7 - 10] ParameterOne;
+    console.print("\t\tParameter Two: "); console.print(String(Incoming_Message_from_Focuser.field.ParameterTwo));         // [11 - 14] ParameterTwo
+    console.print("\t\tParameter Three: "); console.print(String(Incoming_Message_from_Focuser.field.ParameterThree));		// [15 - 18] ParameterThree;
+    console.print("\t\tParameter Four: "); console.print(String(Incoming_Message_from_Focuser.field.ParameterFour));       // [19 - 22] ParameterFour;	
+    console.print("\t\tParameter Five: "); console.print(String(Incoming_Message_from_Focuser.field.ParameterFive));       // [23 - 26]
+    console.print("\t\tParameter Six: "); console.print(String(Incoming_Message_from_Focuser.field.ParameterSix));		    // [27 - 30]
+#endif
+#endif
+#ifdef USE_CONSOLE
+    console_print("\tPacket Received from Focuser forwarded to PC_API, Exerciser and Panel");
 #endif
 }
-void Process_Incoming_Packet_from_PC_API() {                                // Process a pcket from the PC_API or the Emulator  
+void Process_Incoming_Packet_from_PC_API() {                                // Process a pcket from the PC_API or the Exerciser  
     PC_API_Incoming_Message_Available = false;                              // clear rhe packet received flag
     PC_API_Packets_Received++;                                              // increment the PC_API packets received count
     if (Incoming_Message_from_PC_API.field.MessageTarget == (byte)Device_Hub) {     // Packet should be processed by the HUB
@@ -519,7 +552,7 @@ void Process_Incoming_Packet_from_PC_API() {                                // P
             Outgoing_Message_to_PC_API.field.ParameterSix = (double)0;
             for (int i = 0; i <= packet_length; i++) {
                 PC_API_Port.write(Outgoing_Message_to_PC_API.character[i]);         // send reply packet to PC_API
-                Emulator_Port.write(Outgoing_Message_to_PC_API.character[i]);       // send to Emulator
+                Exerciser_Port.write(Outgoing_Message_to_PC_API.character[i]);       // send to Exerciser
                 Panel_Port.write(Outgoing_Message_to_PC_API.character[i]);          // send to Panel
             }
             break;
@@ -541,7 +574,7 @@ void Process_Incoming_Packet_from_PC_API() {                                // P
             Outgoing_Message_to_PC_API.field.ParameterSix = (double)0;
             for (int i = 0; i <= packet_length; i++) {
                 PC_API_Port.write(Outgoing_Message_to_PC_API.character[i]);
-                Emulator_Port.write(Outgoing_Message_to_PC_API.character[i]);
+                Exerciser_Port.write(Outgoing_Message_to_PC_API.character[i]);
                 Panel_Port.write(Outgoing_Message_to_PC_API.character[i]);
             }
             break;
@@ -563,7 +596,7 @@ void Process_Incoming_Packet_from_PC_API() {                                // P
             Outgoing_Message_to_PC_API.field.ParameterFive = Panel_Packets_Received;
             for (int i = 0; i <= packet_length; i++) {
                 PC_API_Port.write(Outgoing_Message_to_PC_API.character[i]);
-                Emulator_Port.write(Outgoing_Message_to_PC_API.character[i]);
+                Exerciser_Port.write(Outgoing_Message_to_PC_API.character[i]);
                 Panel_Port.write(Outgoing_Message_to_PC_API.character[i]);
             }
             break;
@@ -580,7 +613,7 @@ void Process_Incoming_Packet_from_PC_API() {                                // P
     else if (Incoming_Message_from_PC_API.field.MessageTarget == (byte)Device_Altitude) {
         for (int i = 0; i <= packet_length; i++) {
             Altitude_Port.write(Incoming_Message_from_PC_API.character[i]);
-            Emulator_Port.write(Incoming_Message_from_PC_API.character[i]);
+            Exerciser_Port.write(Incoming_Message_from_PC_API.character[i]);
             Panel_Port.write(Incoming_Message_from_PC_API.character[i]);
         }
 #ifdef USE_CONSOLE
@@ -590,7 +623,7 @@ void Process_Incoming_Packet_from_PC_API() {                                // P
     else if (Incoming_Message_from_PC_API.field.MessageTarget == (byte)Device_Azimuth) {
         for (int i = 0; i <= packet_length; i++) {
             Azimuth_Port.write(Incoming_Message_from_PC_API.character[i]);
-            Emulator_Port.write(Incoming_Message_from_PC_API.character[i]);
+            Exerciser_Port.write(Incoming_Message_from_PC_API.character[i]);
             Panel_Port.write(Incoming_Message_from_PC_API.character[i]);
         }
 #ifdef USE_CONSOLE
@@ -600,7 +633,7 @@ void Process_Incoming_Packet_from_PC_API() {                                // P
     else if (Incoming_Message_from_PC_API.field.MessageTarget == (byte)Device_Focuser) {
         for (int i = 0; i <= packet_length; i++) {
             Focuser_Port.write(Incoming_Message_from_PC_API.character[i]);
-            Emulator_Port.write(Incoming_Message_from_PC_API.character[i]);
+            Exerciser_Port.write(Incoming_Message_from_PC_API.character[i]);
             Panel_Port.write(Incoming_Message_from_PC_API.character[i]);
         }
 #ifdef USE_CONSOLE
@@ -611,26 +644,26 @@ void Process_Incoming_Packet_from_PC_API() {                                // P
         for (int i = 0; i <= packet_length; i++) {
             Altitude_Port.write(Incoming_Message_from_PC_API.character[i]);
             Azimuth_Port.write(Incoming_Message_from_PC_API.character[i]);
-            Emulator_Port.write(Incoming_Message_from_PC_API.character[i]);
+            Exerciser_Port.write(Incoming_Message_from_PC_API.character[i]);
             Panel_Port.write(Incoming_Message_from_PC_API.character[i]);
         }
 #ifdef USE_CONSOLE
         console_print("\tPacket Received from PC_API forwarded to Altitude and Azimuth");
 #endif
     }
-    else if (Incoming_Message_from_PC_API.field.MessageTarget == (byte)Device_Emulator) {
+    else if (Incoming_Message_from_PC_API.field.MessageTarget == (byte)Device_Exerciser) {
         for (int i = 0; i <= packet_length; i++) {
-            Emulator_Port.write(Incoming_Message_from_PC_API.character[i]);
+            Exerciser_Port.write(Incoming_Message_from_PC_API.character[i]);
             Panel_Port.write(Incoming_Message_from_PC_API.character[i]);
         }
 #ifdef USE_CONSOLE
-        console_print("\tPacket Received from PC_API forwarded to Emulator");
+        console_print("\tPacket Received from PC_API forwarded to Exerciser");
 #endif
     }
     else if (Incoming_Message_from_PC_API.field.MessageTarget == (byte)Device_Panel) {
         for (int i = 0; i <= packet_length; i++) {
             Panel_Port.write(Incoming_Message_from_PC_API.character[i]);
-            Emulator_Port.write(Incoming_Message_from_PC_API.character[i]);
+            Exerciser_Port.write(Incoming_Message_from_PC_API.character[i]);
         }
 #ifdef USE_CONSOLE
         console_print("\tPacket Received from PC_API forwarded to Panel");
@@ -639,201 +672,201 @@ void Process_Incoming_Packet_from_PC_API() {                                // P
     else if (Incoming_Message_from_PC_API.field.MessageTarget == (byte)Device_Camera) {
         for (int i = 0; i <= packet_length; i++) {
             Camera_Port.write(Incoming_Message_from_PC_API.character[i]);
-            Emulator_Port.write(Incoming_Message_from_PC_API.character[i]);
+            Exerciser_Port.write(Incoming_Message_from_PC_API.character[i]);
         }
 #ifdef USE_CONSOLE
         console_print("\tPacket Received from PC_API forwarded to Camera");
 #endif
     }
 }
-void Process_Incoming_Packet_from_Emulator() {
-    Emulator_Incoming_Message_Available = false;
-    Emulator_Packets_Received++;
-    if (Incoming_Message_from_Emulator.field.MessageTarget == (byte)Device_Hub) {           // Packet should be processed by the HUB
-        switch ((int)Incoming_Message_from_Emulator.field.CommandNumber) {
+void Process_Incoming_Packet_from_Exerciser() {
+    Exerciser_Incoming_Message_Available = false;
+    Exerciser_Packets_Received++;
+    if (Incoming_Message_from_Exerciser.field.MessageTarget == (byte)Device_Hub) {           // Packet should be processed by the HUB
+        switch ((int)Incoming_Message_from_Exerciser.field.CommandNumber) {
         case (int)Request_Firmware_Version:
 #ifdef USE_CONSOLE
-            console_print("\tPacket Received from Emulator, Hub Firmware Version Requested");
+            console_print("\tPacket Received from Exerciser, Hub Firmware Version Requested");
 #endif
-            Outgoing_Message_to_Emulator.field.MessageTarget = Device_Emulator;
-            Outgoing_Message_to_Emulator.field.MessageSource = Device_Hub;
-            Outgoing_Message_to_Emulator.field.CommandNumber = Request_Firmware_Version;
-            Outgoing_Message_to_Emulator.field.PacketType = REP;
-            Outgoing_Message_to_Emulator.field.CurrentStatus = Hub_status.word;
-            Outgoing_Message_to_Emulator.field.ParameterOne = (double)Firmware_Version;
-            Outgoing_Message_to_Emulator.field.ParameterTwo = (double)0;
-            Outgoing_Message_to_Emulator.field.ParameterThree = (double)0;
-            Outgoing_Message_to_Emulator.field.ParameterFour = (double)0;
-            Outgoing_Message_to_Emulator.field.ParameterFive = (double)0;
-            Outgoing_Message_to_Emulator.field.ParameterSix = (double)0;
+            Outgoing_Message_to_Exerciser.field.MessageTarget = Device_Exerciser;
+            Outgoing_Message_to_Exerciser.field.MessageSource = Device_Hub;
+            Outgoing_Message_to_Exerciser.field.CommandNumber = Request_Firmware_Version;
+            Outgoing_Message_to_Exerciser.field.PacketType = REP;
+            Outgoing_Message_to_Exerciser.field.CurrentStatus = Hub_status.word;
+            Outgoing_Message_to_Exerciser.field.ParameterOne = (double)Firmware_Version;
+            Outgoing_Message_to_Exerciser.field.ParameterTwo = (double)0;
+            Outgoing_Message_to_Exerciser.field.ParameterThree = (double)0;
+            Outgoing_Message_to_Exerciser.field.ParameterFour = (double)0;
+            Outgoing_Message_to_Exerciser.field.ParameterFive = (double)0;
+            Outgoing_Message_to_Exerciser.field.ParameterSix = (double)0;
             for (int i = 0; i <= packet_length; i++) {
-                Emulator_Port.write(Outgoing_Message_to_Emulator.character[i]);
-                Panel_Port.write(Outgoing_Message_to_Emulator.character[i]);
+                Exerciser_Port.write(Outgoing_Message_to_Exerciser.character[i]);
+                Panel_Port.write(Outgoing_Message_to_Exerciser.character[i]);
             }
             break;
         case (int)Request_Status: {
 #ifdef USE_CONSOLE
-            console_print("\tPacket Received from Emulator, Hub Status Requested");
+            console_print("\tPacket Received from Exerciser, Hub Status Requested");
 #endif
             UpdateEnvironmentalSensors();
-            Outgoing_Message_to_Emulator.field.MessageTarget = Device_Emulator;
-            Outgoing_Message_to_Emulator.field.MessageSource = Device_Hub;
-            Outgoing_Message_to_Emulator.field.CommandNumber = Firmware_Version;
-            Outgoing_Message_to_Emulator.field.PacketType = REP;
-            Outgoing_Message_to_Emulator.field.CurrentStatus = Hub_status.word;
-            Outgoing_Message_to_Emulator.field.ParameterOne = (double)Motor_Voltage;
-            Outgoing_Message_to_Emulator.field.ParameterTwo = (double)freeMemory();
-            Outgoing_Message_to_Emulator.field.ParameterThree = (double)0;
-            Outgoing_Message_to_Emulator.field.ParameterFour = (double)0;
-            Outgoing_Message_to_Emulator.field.ParameterFive = (double)0;
-            Outgoing_Message_to_Emulator.field.ParameterSix = (double)0;
+            Outgoing_Message_to_Exerciser.field.MessageTarget = Device_Exerciser;
+            Outgoing_Message_to_Exerciser.field.MessageSource = Device_Hub;
+            Outgoing_Message_to_Exerciser.field.CommandNumber = Firmware_Version;
+            Outgoing_Message_to_Exerciser.field.PacketType = REP;
+            Outgoing_Message_to_Exerciser.field.CurrentStatus = Hub_status.word;
+            Outgoing_Message_to_Exerciser.field.ParameterOne = (double)Motor_Voltage;
+            Outgoing_Message_to_Exerciser.field.ParameterTwo = (double)freeMemory();
+            Outgoing_Message_to_Exerciser.field.ParameterThree = (double)0;
+            Outgoing_Message_to_Exerciser.field.ParameterFour = (double)0;
+            Outgoing_Message_to_Exerciser.field.ParameterFive = (double)0;
+            Outgoing_Message_to_Exerciser.field.ParameterSix = (double)0;
             for (int i = 0; i <= packet_length; i++) {
-                Emulator_Port.write(Outgoing_Message_to_Emulator.character[i]);
-                Panel_Port.write(Outgoing_Message_to_Emulator.character[i]);
+                Exerciser_Port.write(Outgoing_Message_to_Exerciser.character[i]);
+                Panel_Port.write(Outgoing_Message_to_Exerciser.character[i]);
             }
             break;
         }
         case (int)Request_Traffic: {
 #ifdef USE_CONSOLE
-            console_print("\tPacket Received from Emulator, Hub Traffic Requested");
+            console_print("\tPacket Received from Exerciser, Hub Traffic Requested");
 #endif
             UpdateEnvironmentalSensors();
-            Outgoing_Message_to_Emulator.field.MessageTarget = Device_Emulator;
-            Outgoing_Message_to_Emulator.field.MessageSource = Device_Hub;
-            Outgoing_Message_to_Emulator.field.CommandNumber = Request_Traffic;
-            Outgoing_Message_to_Emulator.field.PacketType = REP;
-            Outgoing_Message_to_Emulator.field.CurrentStatus = Hub_status.word;
-            Outgoing_Message_to_Emulator.field.ParameterOne = (double)Altitude_Packets_Received;
-            Outgoing_Message_to_Emulator.field.ParameterTwo = (double)Azimuth_Packets_Received;
-            Outgoing_Message_to_Emulator.field.ParameterThree = (double)Focuser_Packets_Received;
-            Outgoing_Message_to_Emulator.field.ParameterFour = (double)PC_API_Packets_Received;
-            Outgoing_Message_to_Emulator.field.ParameterFive = (double)Panel_Packets_Received;
-            Outgoing_Message_to_Emulator.field.ParameterSix = (double)Emulator_Packets_Received;
+            Outgoing_Message_to_Exerciser.field.MessageTarget = Device_Exerciser;
+            Outgoing_Message_to_Exerciser.field.MessageSource = Device_Hub;
+            Outgoing_Message_to_Exerciser.field.CommandNumber = Request_Traffic;
+            Outgoing_Message_to_Exerciser.field.PacketType = REP;
+            Outgoing_Message_to_Exerciser.field.CurrentStatus = Hub_status.word;
+            Outgoing_Message_to_Exerciser.field.ParameterOne = (double)Altitude_Packets_Received;
+            Outgoing_Message_to_Exerciser.field.ParameterTwo = (double)Azimuth_Packets_Received;
+            Outgoing_Message_to_Exerciser.field.ParameterThree = (double)Focuser_Packets_Received;
+            Outgoing_Message_to_Exerciser.field.ParameterFour = (double)PC_API_Packets_Received;
+            Outgoing_Message_to_Exerciser.field.ParameterFive = (double)Panel_Packets_Received;
+            Outgoing_Message_to_Exerciser.field.ParameterSix = (double)Exerciser_Packets_Received;
             for (int i = 0; i <= packet_length; i++) {
-                Emulator_Port.write(Outgoing_Message_to_Emulator.character[i]);
-                Panel_Port.write(Outgoing_Message_to_Emulator.character[i]);
+                Exerciser_Port.write(Outgoing_Message_to_Exerciser.character[i]);
+                Panel_Port.write(Outgoing_Message_to_Exerciser.character[i]);
             }
             break;
         }
         case (int)Request_Environment: {
 #ifdef USE_CONSOLE
-            console_print("\tPacket Received from Emulator, Hub Environment Requested");
+            console_print("\tPacket Received from Exerciser, Hub Environment Requested");
 #endif
             UpdateEnvironmentalSensors();
-            Outgoing_Message_to_Emulator.field.MessageTarget = Device_Emulator;
-            Outgoing_Message_to_Emulator.field.MessageSource = Device_Hub;
-            Outgoing_Message_to_Emulator.field.CommandNumber = Request_Traffic;
-            Outgoing_Message_to_Emulator.field.PacketType = REP;
-            Outgoing_Message_to_Emulator.field.CurrentStatus = Hub_status.word;
-            Outgoing_Message_to_Emulator.field.ParameterOne = (double)Motor_Voltage;
-            Outgoing_Message_to_Emulator.field.ParameterTwo = (double)freeMemory();
-            Outgoing_Message_to_Emulator.field.ParameterThree = (double)Ambient_Temperature;
-            Outgoing_Message_to_Emulator.field.ParameterFour = (double)Ambient_Humidity;
-            Outgoing_Message_to_Emulator.field.ParameterFive = (double)0;
-            Outgoing_Message_to_Emulator.field.ParameterSix = (double)0;
+            Outgoing_Message_to_Exerciser.field.MessageTarget = Device_Exerciser;
+            Outgoing_Message_to_Exerciser.field.MessageSource = Device_Hub;
+            Outgoing_Message_to_Exerciser.field.CommandNumber = Request_Traffic;
+            Outgoing_Message_to_Exerciser.field.PacketType = REP;
+            Outgoing_Message_to_Exerciser.field.CurrentStatus = Hub_status.word;
+            Outgoing_Message_to_Exerciser.field.ParameterOne = (double)Motor_Voltage;
+            Outgoing_Message_to_Exerciser.field.ParameterTwo = (double)freeMemory();
+            Outgoing_Message_to_Exerciser.field.ParameterThree = (double)Ambient_Temperature;
+            Outgoing_Message_to_Exerciser.field.ParameterFour = (double)Ambient_Humidity;
+            Outgoing_Message_to_Exerciser.field.ParameterFive = (double)0;
+            Outgoing_Message_to_Exerciser.field.ParameterSix = (double)0;
             for (int i = 0; i <= packet_length; i++) {
-                Emulator_Port.write(Outgoing_Message_to_Emulator.character[i]);
-                Panel_Port.write(Outgoing_Message_to_Emulator.character[i]);
+                Exerciser_Port.write(Outgoing_Message_to_Exerciser.character[i]);
+                Panel_Port.write(Outgoing_Message_to_Exerciser.character[i]);
             }
             break;
         }
         case (int)Heartbeat: {
 #ifdef USE_CONSOLE
-            console_print("\tPacket Received from Emulator, Emulator Heartbeat Received");
+            console_print("\tPacket Received from Exerciser, Exerciser Heartbeat Received");
 #endif
             break;
         }
         case (int)Request_Reset: {
 #ifdef USE_CONSOLE
-            console_print("\tPacket Received from Emulator, Reset Requested");
+            console_print("\tPacket Received from Exerciser, Reset Requested");
 #endif
             delay(200);
             while (1);                      // causes watchdog driven reboot
         }
         case (int)Get_Millis: {
 #ifdef USE_CONSOLE
-            console_print("\tPacket Received from Emulator, Hub Millis Requested");
+            console_print("\tPacket Received from Exerciser, Hub Millis Requested");
 #endif
-            Outgoing_Message_to_Emulator.field.MessageTarget = Device_Emulator;
-            Outgoing_Message_to_Emulator.field.MessageSource = Device_Hub;
-            Outgoing_Message_to_Emulator.field.CommandNumber = Get_Millis;
-            Outgoing_Message_to_Emulator.field.PacketType = REP;
-            Outgoing_Message_to_Emulator.field.CurrentStatus = Hub_status.word;
-            Outgoing_Message_to_Emulator.field.ParameterOne = (double)millis();
-            Outgoing_Message_to_Emulator.field.ParameterTwo = (double)freeMemory();
-            Outgoing_Message_to_Emulator.field.ParameterThree = (double)0;
-            Outgoing_Message_to_Emulator.field.ParameterFour = (double)0;
-            Outgoing_Message_to_Emulator.field.ParameterFive = (double)0;
-            Outgoing_Message_to_Emulator.field.ParameterSix = (double)0;
+            Outgoing_Message_to_Exerciser.field.MessageTarget = Device_Exerciser;
+            Outgoing_Message_to_Exerciser.field.MessageSource = Device_Hub;
+            Outgoing_Message_to_Exerciser.field.CommandNumber = Get_Millis;
+            Outgoing_Message_to_Exerciser.field.PacketType = REP;
+            Outgoing_Message_to_Exerciser.field.CurrentStatus = Hub_status.word;
+            Outgoing_Message_to_Exerciser.field.ParameterOne = (double)millis();
+            Outgoing_Message_to_Exerciser.field.ParameterTwo = (double)freeMemory();
+            Outgoing_Message_to_Exerciser.field.ParameterThree = (double)0;
+            Outgoing_Message_to_Exerciser.field.ParameterFour = (double)0;
+            Outgoing_Message_to_Exerciser.field.ParameterFive = (double)0;
+            Outgoing_Message_to_Exerciser.field.ParameterSix = (double)0;
             for (int i = 0; i <= packet_length; i++) {
-                Emulator_Port.write(Outgoing_Message_to_Emulator.character[i]);
-                Panel_Port.write(Outgoing_Message_to_Emulator.character[i]);
+                Exerciser_Port.write(Outgoing_Message_to_Exerciser.character[i]);
+                Panel_Port.write(Outgoing_Message_to_Exerciser.character[i]);
             }
             break;
         }
         }       // end of switch commandnumber
     }
-    else if (Incoming_Message_from_Emulator.field.MessageTarget == (byte)Device_PC_API) {       // send packet to Altitude
+    else if (Incoming_Message_from_Exerciser.field.MessageTarget == (byte)Device_PC_API) {       // send packet to Altitude
 #ifdef USE_CONSOLE
-        console_print("\tPacket Received from Emulator forwarded to PC_API and Panel");
+        console_print("\tPacket Received from Exerciser forwarded to PC_API and Panel");
 #endif        
         for (int i = 0; i <= packet_length; i++) {
-            PC_API_Port.write(Incoming_Message_from_Emulator.character[i]);
-            Panel_Port.write(Incoming_Message_from_Emulator.character[i]);
+            PC_API_Port.write(Incoming_Message_from_Exerciser.character[i]);
+            Panel_Port.write(Incoming_Message_from_Exerciser.character[i]);
         }
     }
-    else if (Incoming_Message_from_Emulator.field.MessageTarget == (byte)Device_Altitude) {       // send packet to Altitude
+    else if (Incoming_Message_from_Exerciser.field.MessageTarget == (byte)Device_Altitude) {       // send packet to Altitude
         for (int i = 0; i <= packet_length; i++) {
-            Altitude_Port.write(Incoming_Message_from_Emulator.character[i]);
-            Panel_Port.write(Incoming_Message_from_Emulator.character[i]);
+            Altitude_Port.write(Incoming_Message_from_Exerciser.character[i]);
+            Panel_Port.write(Incoming_Message_from_Exerciser.character[i]);
         }
 #ifdef USE_CONSOLE
-        console_print("\tPacket Received from Emulator forwarded to Altitude");
+        console_print("\tPacket Received from Exerciser forwarded to Altitude");
 #endif
     }
-    else if (Incoming_Message_from_Emulator.field.MessageTarget == (byte)Device_Azimuth) {
+    else if (Incoming_Message_from_Exerciser.field.MessageTarget == (byte)Device_Azimuth) {
         for (int i = 0; i <= packet_length; i++) {
-            Azimuth_Port.write(Incoming_Message_from_Emulator.character[i]);
-            Panel_Port.write(Incoming_Message_from_Emulator.character[i]);
+            Azimuth_Port.write(Incoming_Message_from_Exerciser.character[i]);
+            Panel_Port.write(Incoming_Message_from_Exerciser.character[i]);
         }
 #ifdef USE_CONSOLE
-        console_print("\tPacket Received from Emulator forwarded to Azimuth");
+        console_print("\tPacket Received from Exerciser forwarded to Azimuth");
 #endif
     }
-    else if (Incoming_Message_from_Emulator.field.MessageTarget == (byte)Device_Focuser) {
+    else if (Incoming_Message_from_Exerciser.field.MessageTarget == (byte)Device_Focuser) {
         for (int i = 0; i <= packet_length; i++) {
-            Focuser_Port.write(Incoming_Message_from_Emulator.character[i]);
-            Panel_Port.write(Incoming_Message_from_Emulator.character[i]);
+            Focuser_Port.write(Incoming_Message_from_Exerciser.character[i]);
+            Panel_Port.write(Incoming_Message_from_Exerciser.character[i]);
         }
 #ifdef USE_CONSOLE
-        console_print("\tPacket Received from Emulator forwarded to Focuser");
+        console_print("\tPacket Received from Exerciser forwarded to Focuser");
 #endif
     }
-    else if (Incoming_Message_from_Emulator.field.MessageTarget == (byte)Device_Panel) {
+    else if (Incoming_Message_from_Exerciser.field.MessageTarget == (byte)Device_Panel) {
         for (int i = 0; i <= packet_length; i++) {
-            Panel_Port.write(Incoming_Message_from_Emulator.character[i]);
+            Panel_Port.write(Incoming_Message_from_Exerciser.character[i]);
         }
 #ifdef USE_CONSOLE
-        console_print("\tPacket Received from Emulator forwarded to Panel");
+        console_print("\tPacket Received from Exerciser forwarded to Panel");
 #endif
     }
-    else if (Incoming_Message_from_Emulator.field.MessageTarget == (byte)Device_AltAzi) {
+    else if (Incoming_Message_from_Exerciser.field.MessageTarget == (byte)Device_AltAzi) {
         for (int i = 0; i <= packet_length; i++) {
-            Altitude_Port.write(Incoming_Message_from_Emulator.character[i]);
-            Azimuth_Port.write(Incoming_Message_from_Emulator.character[i]);
-            Panel_Port.write(Incoming_Message_from_Emulator.character[i]);
+            Altitude_Port.write(Incoming_Message_from_Exerciser.character[i]);
+            Azimuth_Port.write(Incoming_Message_from_Exerciser.character[i]);
+            Panel_Port.write(Incoming_Message_from_Exerciser.character[i]);
         }
 #ifdef USE_CONSOLE
-        console_print("\tPacket Received from Emulator forwarded to Altitude and Azimuth");
+        console_print("\tPacket Received from Exerciser forwarded to Altitude and Azimuth");
 #endif
     }
-    else if (Incoming_Message_from_Emulator.field.MessageTarget == (byte)Device_Camera) {
+    else if (Incoming_Message_from_Exerciser.field.MessageTarget == (byte)Device_Camera) {
         for (int i = 0; i <= packet_length; i++) {
-            Camera_Port.write(Incoming_Message_from_Emulator.character[i]);
-            Panel_Port.write(Incoming_Message_from_Emulator.character[i]);
+            Camera_Port.write(Incoming_Message_from_Exerciser.character[i]);
+            Panel_Port.write(Incoming_Message_from_Exerciser.character[i]);
         }
 #ifdef USE_CONSOLE
-        console_print("\tPacket Received from Emulator forwarded to Altitude and Azimuth");
+        console_print("\tPacket Received from Exerciser forwarded to Altitude and Azimuth");
 #endif
     }
 }
@@ -926,12 +959,12 @@ void Process_Incoming_Packet_from_Panel() {
             Focuser_Port.write(Incoming_Message_from_Panel.character[i]);
         }
     }
-    else if (Incoming_Message_from_Panel.field.MessageTarget == (byte)Device_Emulator) {
+    else if (Incoming_Message_from_Panel.field.MessageTarget == (byte)Device_Exerciser) {
 #ifdef USE_CONSOLE
-        console_print("\tPacket Received from Panel forwarded to Emulator");
+        console_print("\tPacket Received from Panel forwarded to Exerciser");
 #endif
         for (int i = 0; i <= packet_length; i++) {
-            Emulator_Port.write(Incoming_Message_from_Panel.character[i]);
+            Exerciser_Port.write(Incoming_Message_from_Panel.character[i]);
         }
     }
     else if (Incoming_Message_from_PC_API.field.MessageTarget == (byte)Device_AltAzi) {
@@ -957,10 +990,10 @@ void Process_Incoming_Packet_from_Camera() {					// process an update message fr
     Camera_Incoming_Message_Available = false;
     Camera_Packets_Received++;
 #ifdef USE_CONSOLE
-    console_print("\tPacket Received from Camera forwarded to Emulator, PC_API and Panel");
+    console_print("\tPacket Received from Camera forwarded to Exerciser, PC_API and Panel");
 #endif
     for (int i = 0; i <= packet_length; i++) {                  // copy the input packet to the output packet buffer
-        Emulator_Port.write(Incoming_Message_from_Camera.character[i]);
+        Exerciser_Port.write(Incoming_Message_from_Camera.character[i]);
         PC_API_Port.write(Incoming_Message_from_Camera.character[i]);
         Panel_Port.write(Incoming_Message_from_Camera.character[i]);
     }
