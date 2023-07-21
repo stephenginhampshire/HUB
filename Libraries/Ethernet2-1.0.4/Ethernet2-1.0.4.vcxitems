@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding ="utf-8" ?>
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003" >
+  <PropertyGroup Label="Globals" >
+    <MSBuildAllProjects>$(MSBuildAllProjects);$(MSBuildThisFileFullPath)</MSBuildAllProjects>
+    <HasSharedItems>true</HasSharedItems>
+    <ItemsProjectGuid>{f3f1fccc-7242-4bfb-ac2f-a16adfee3188}</ItemsProjectGuid>
+  </PropertyGroup>
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories);$(MSBuildThisFileDirectory)</AdditionalIncludeDirectories>
+    </ClCompile>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ProjectCapability Include="SourceItemsFromImports" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="$(MSBuildThisFileDirectory)src\Dhcp.cpp" />
+<ClCompile Include="$(MSBuildThisFileDirectory)src\Dns.cpp" />
+<ClCompile Include="$(MSBuildThisFileDirectory)src\Ethernet2.cpp" />
+<ClCompile Include="$(MSBuildThisFileDirectory)src\EthernetClient.cpp" />
+<ClCompile Include="$(MSBuildThisFileDirectory)src\EthernetServer.cpp" />
+<ClCompile Include="$(MSBuildThisFileDirectory)src\EthernetUdp2.cpp" />
+<ClCompile Include="$(MSBuildThisFileDirectory)src\Twitter.cpp" />
+<ClCompile Include="$(MSBuildThisFileDirectory)src\utility\socket.cpp" />
+<ClCompile Include="$(MSBuildThisFileDirectory)src\utility\w5500.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="$(MSBuildThisFileDirectory)src\Dhcp.h" />
+<ClInclude Include="$(MSBuildThisFileDirectory)src\Dns.h" />
+<ClInclude Include="$(MSBuildThisFileDirectory)src\Ethernet2.h" />
+<ClInclude Include="$(MSBuildThisFileDirectory)src\EthernetClient.h" />
+<ClInclude Include="$(MSBuildThisFileDirectory)src\EthernetServer.h" />
+<ClInclude Include="$(MSBuildThisFileDirectory)src\EthernetUdp2.h" />
+<ClInclude Include="$(MSBuildThisFileDirectory)src\Twitter.h" />
+<ClInclude Include="$(MSBuildThisFileDirectory)src\util.h" />
+<ClInclude Include="$(MSBuildThisFileDirectory)src\utility\socket.h" />
+<ClInclude Include="$(MSBuildThisFileDirectory)src\utility\util.h" />
+<ClInclude Include="$(MSBuildThisFileDirectory)src\utility\w5500.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <Text Include="$(MSBuildThisFileDirectory)CONTRIBUTIONS.txt" />
+<Text Include="$(MSBuildThisFileDirectory)keywords.txt" />
+<Text Include="$(MSBuildThisFileDirectory)library.properties" />
+<Text Include="$(MSBuildThisFileDirectory)license.txt" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="$(MSBuildThisFileDirectory)README.md" />
+  </ItemGroup>
+</Project>

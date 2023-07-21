@@ -142,12 +142,12 @@ uint8_t TwoWire::requestFrom(uint8_t address, uint8_t quantity, uint32_t iaddres
 
   beginTransmission(address);
 
-  // the maximum size of internal address is 3 bytes
+  // the maximum size of internal address is 3 uint8_ts
   if (isize > 3){
     isize = 3;
   }
 
-  // write internal register address - most significant byte first
+  // write internal register address - most significant uint8_t first
   while (isize-- > 0)
     write((uint8_t)(iaddress >> (isize*8)));
   endTransmission(false);
@@ -246,7 +246,7 @@ size_t TwoWire::write(uint8_t data)
       setWriteError();
       return 0;
     }
-    // put byte in tx buffer
+    // put uint8_t in tx buffer
     txBuffer[txBufferIndex] = data;
     ++txBufferIndex;
     // update amount in buffer   
@@ -279,7 +279,7 @@ size_t TwoWire::write(const uint8_t *data, size_t quantity)
 
 // must be called in:
 // slave rx event callback
-// or after requestFrom(address, numBytes)
+// or after requestFrom(address, numuint8_ts)
 int TwoWire::available(void)
 {
   return rxBufferLength - rxBufferIndex;
@@ -287,12 +287,12 @@ int TwoWire::available(void)
 
 // must be called in:
 // slave rx event callback
-// or after requestFrom(address, numBytes)
+// or after requestFrom(address, numuint8_ts)
 int TwoWire::read(void)
 {
   int value = -1;
   
-  // get each successive byte on each call
+  // get each successive uint8_t on each call
   if(rxBufferIndex < rxBufferLength){
     value = rxBuffer[rxBufferIndex];
     ++rxBufferIndex;
@@ -303,7 +303,7 @@ int TwoWire::read(void)
 
 // must be called in:
 // slave rx event callback
-// or after requestFrom(address, numBytes)
+// or after requestFrom(address, numuint8_ts)
 int TwoWire::peek(void)
 {
   int value = -1;
@@ -321,7 +321,7 @@ void TwoWire::flush(void)
 }
 
 // behind the scenes function that is called when data is received
-void TwoWire::onReceiveService(uint8_t* inBytes, int numBytes)
+void TwoWire::onReceiveService(uint8_t* inuint8_ts, int numuint8_ts)
 {
   // don't bother if user hasn't registered a callback
   if(!user_onReceive){
@@ -335,14 +335,14 @@ void TwoWire::onReceiveService(uint8_t* inBytes, int numBytes)
   }
   // copy twi rx buffer into local read buffer
   // this enables new reads to happen in parallel
-  for(uint8_t i = 0; i < numBytes; ++i){
-    rxBuffer[i] = inBytes[i];    
+  for(uint8_t i = 0; i < numuint8_ts; ++i){
+    rxBuffer[i] = inuint8_ts[i];    
   }
   // set rx iterator vars
   rxBufferIndex = 0;
-  rxBufferLength = numBytes;
+  rxBufferLength = numuint8_ts;
   // alert user program
-  user_onReceive(numBytes);
+  user_onReceive(numuint8_ts);
 }
 
 // behind the scenes function that is called when data is requested
