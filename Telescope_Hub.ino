@@ -1,22 +1,17 @@
 /*
   Arduino Ethernet Telescope Hub
-        interfaces Steve and Jamie Gould's Telescope to a PC ASCOM compliant software driver
+        Interfaces Steve and Jamie Gould's Telescope to a ASCOM compliant software driver
         Declination = Altitude = north/south = up down
         Right Ascension = Azimuth  = east/west = left right
         Communications to the motor controllers is made through this HUB.
-
     Functionality:
-    1. Receive packets of information from the Operator
+    1. Receive packets of information from the CPU (Windows PC)
         a)  If the target is the Hub execute the contained command
         b)  Otherwise forward the received packet to the indicated target
-        c)  Forward all received packets to the panel to add to the sd log and update displays
     2. Receive packets of information from the attached devices
-        a)  If the target is the Hub execute the contained command, this would normally only be required if the Emulator was attached.
-        b)  Otherwise forward the received packets to the indicated target
-    3. Send and receive Heartbeat packets to attached devices
-    4. Periodically, and on power on, send a "Are you connected message" to all attached devices, and process replies.
+        a)  Forward the received packets to the indicated target
 */
-/* Version Control ----------------------------------------------------------------------------------------------------
+/* Version Control --------------------------------------------------------------------------------
 Date		Version Description
 27/01/2018  1
 11/05/2021	1.1     Updated to be compatible with Telescope and Focuser
@@ -30,9 +25,11 @@ Date		Version Description
 30/03/2023  1.9     Hub only sends its own heartbeat to the Operator (when connected), but receives from all devices, except the Panel
 18/07/2023  1.10    Exerciser removed as it's packets should be handled by the Port it is connected to
 20/07/2023  1.11    Introduced configuration piano switch
+01/10/2024  2.0     Development Restarted
+17/10/2024  2.1     Fully packet receipt/transmission simulation introduced
 */
-constexpr double Firmware_Version = (double)1.10;
-// Inclusions ---------------------------------------------------------------------------------------------------------
+constexpr double Firmware_Version = (double)2.1;
+// Inclusions -------------------------------------------------------------------------------------
 #include <avr/wdt.h>
 #include <Bounce2.h>
 #include <DHT_U.h>
@@ -47,35 +44,34 @@ constexpr double Firmware_Version = (double)1.10;
 #include <Dhcp.h>
 #include <NeoSWSerial.h>
 #include <Hardwareserial.h>
+#define SIMULATE_CPU_INCOMING_PACKETS           // Simulate the receipt of packets from the CPU
+//#define SIMULATE_ALT_INCOMING_PACKETS
+//#define SIMULATE_AZI_INCOMING_PACKETS
+//#define SIMULATE_FOC_INCOMING_PACKETS
+//#define SIMULATE_CAM_INCOMING_PACKETS
+//#define SIMULATE_MON_INCOMING_PACKETS
+#ifdef SIMULATE_CPU_INCOMING_PACKETS
+#define SIMULATION_MODE                         // Common simulation mode to print diagnostic messages
+#endif
 #include <C:\Users\Stephen\Dropbox\Projects\Combined_Telescope\Common_Files\Telescope_Commands.h>
-// Configuration Switches Signifance ----------------------------------------------------------------------------------
+#define PRINT_CONSOLE_MESSAGES
 #define console Serial
-constexpr int Operator_Available = 0x01;       // configuration switch setting to include Operator communications
-constexpr int Altitude_Available = 0x02;
-constexpr int Azimuth_Available = 0x04;
-constexpr int Focuser_Available = 0x08;
-constexpr int Panel_Available = 0x10;
-constexpr int Print_Received = 0x20;
-constexpr int Print_Transmitted = 0x40;
-constexpr int Print_General = 0x80;
-// Constants ----------------------------------------------------------------------------------------------------------
+#ifdef SIMULATE_CPU_INCOMING_PACKETS
+#include <HUB_Simulation.h>
+#endif
+// Constants --------------------------------------------------------------------------------------
 constexpr int Altitude_baud = (int)38400;
 constexpr int Azimuth_baud = (int)38400;
 constexpr int Focuser_baud = (int)38400;
-constexpr int Panel_baud = (int)38400;
+constexpr int Camera_baud = (int)38400;
+constexpr int Monitor_baud = (int)38400;
 constexpr unsigned long Led_On_Time = (unsigned long)250;
-// Constants ------------------------------------------------------------------
-//uint8_t mac[] = { 0x90, 0xA2, 0xDA, 0x11, 0x23, 0x40 };	// MAC address of Ethernet controller, found on a sticker on the back of the Ethernet shield.
-//uint8_t mac[] = { 0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED };	// MAC address of Jamie's Ethernet Operator
-//IPAddress ip(92, 68, 0, 30);							// IP Address (FIXED) of this server
-//IPAddress gateway(92, 68, 0, 00);
-//IPAddress subnet(255, 255, 255, 0);
-
+// Constants ---------------------------------------------------------------------------------------
 uint8_t mac[] = {
   0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED
 };
 IPAddress ip(192, 168, 1, 177);
-// Freememory calculater - Returns the current amount of free memory in bytes -----------------------------------------
+// Freememory calculater - Returns the current amount of free memory in bytes ----------------------
 extern unsigned int __bss_end;
 extern void* __brkval;
 int freeMemory() {
@@ -84,102 +80,101 @@ int freeMemory() {
         return ((int)&free_memory) - ((int)__brkval);
     return ((int)&free_memory) - ((int)&__bss_end);
 }
-// Hardware configuration ---------------------------------------------------------------------------------------------
-constexpr uint8_t Voltage_pin = A2;		    // A2	motor_voltage
-constexpr uint8_t Green_led_pin = 3;        // Green led
-constexpr uint8_t Temperature_pin = 4;	    // ambient temperature pin
-constexpr uint8_t Fan_pin = 5;              // fan (relay) pin
+// Hardware configuration -------------------------------------------------------------------------
+// Communications Connections ---------------------------------------------------------------------
 constexpr uint8_t Altitude_TX_pin = 18;     // Altitude Port TX
 constexpr uint8_t Altitude_RX_pin = 19;     // Altitude Port RX
 constexpr uint8_t Azimuth_TX_pin = 16;      // Azimuth Port TX
 constexpr uint8_t Azimuth_RX_pin = 17;      // Azimuth Port RX
 constexpr uint8_t Focuser_TX_pin = 14;      // Focuser Port TX
 constexpr uint8_t Focuser_RX_pin = 15;      // Focuser Port RX 
-constexpr uint8_t Panel_TX_pin = 12;        // Control Panel Port TX
-constexpr uint8_t Panel_RX_pin = 13;        // Control Panel Port RX
-constexpr uint8_t Config_Bit_0_pin = 42;    // Configuration pin bit 0
-constexpr uint8_t Config_Bit_1_pin = 43;    // Configuration pin bit 1
-constexpr uint8_t Config_Bit_2_pin = 44;    // Configuration pin bit 2
-constexpr uint8_t Config_Bit_3_pin = 45;    // Configuration pin bit 3
-constexpr uint8_t Config_Bit_4_pin = 46;    // Configuration pin bit 4
-constexpr uint8_t Config_Bit_5_pin = 47;    // Configuration pin bit 5
-constexpr uint8_t Config_Bit_6_pin = 48;    // Configuration pin bit 6
-constexpr uint8_t Config_Bit_7_pin = 49;    // Configuration pin bit 7
-
-//--------------------------------------------------------------------------------------------------------------------
-double Ambient_Temperature = 0;			// temperature value
-double Ambient_Humidity = 0;
-double Motor_Voltage = 0;
-// Instantiations -----------------------------------------------------------------------------------------------------
-EthernetServer Operator_Port(80);                                           // Create a server listening on port 80.
-HardwareSerial Altitude_Port = Serial1;                                     // Altitude Port
-HardwareSerial Azimuth_Port = Serial2;                                      // Azimuth Port
-HardwareSerial Focuser_Port = Serial3;                                      // Focuser Port
-NeoSWSerial Panel_Port(Panel_RX_pin, Panel_TX_pin);                         // Panel Software Port
-// Communications Variables -------------------------------------------------------------------------------------------
-DEVICE_Status System_Connectivity;
-PacketUnion Incoming_Packet_from_Azimuth;
-PacketUnion Incoming_Packet_from_Operator;
-PacketUnion Incoming_Packet_from_Altitude;
-PacketUnion Incoming_Packet_from_Focuser;
-PacketUnion Incoming_Packet_from_Panel;
-PacketUnion Outgoing_Message;
-bool Altitude_Incoming_Packet_Available = false;
-bool Azimuth_Incoming_Packet_Available = false;
-bool Focuser_Incoming_Packet_Available = false;
-bool Operator_Incoming_Packet_Available = false;
-bool Panel_Incoming_Packet_Available = false;
-uint8_t Altitude_in_buffer_counter = 0;
-uint8_t Azimuth_in_buffer_counter = 0;
-uint8_t Focuser_in_buffer_counter = 0;
-uint8_t Panel_in_buffer_counter = 0;
+constexpr uint8_t Monitor_TX_pin = 12;      // Monitor Panel Port TX
+constexpr uint8_t Monitor_RX_pin = 13;      // Monitor Panel Port RX
+constexpr uint8_t Camera_TX_pin = 10;       // Camera Port TX
+constexpr uint8_t Camera_RX_pin = 11;       // Camera Port RX
+// Peripheral Connections --------------------------------------------------------------------------
+constexpr uint8_t RUN_Active_led_pin = 35;  // RUN led
+constexpr uint8_t Ambient_Sensor_pin = 37;	// ambient temperature and humidity pin
+constexpr uint8_t Fan_pin = 39;             // fan (relay) pin
+constexpr uint8_t Voltage_pin = A2;         // A2	motor_voltage
+// -------------------------------------------------------------------------------------------------
+constexpr uint8_t MAXIMUM_FIELDS_IN_PACKET = 10;        //
+constexpr uint8_t MAX_FIELD_LENGTH = 20;                // Maximum length of each field (adjust as needed)
+constexpr double Fan_Switch_On_Temperature = 30.00;     // Temperature at which fan should turn on
+constexpr double Fan_Switch_Off_Temperature = 25.00;    // Temperature at which fan should turn off
+// -------------------------------------------------------------------------------------------------
+double Ambient_Temperature = 0;             // Temperature value
+double Ambient_Humidity = 0;                // Humidity value
+double Motor_Voltage = 0;                   // Voltage value
+// Instantiations ---------------------------------------------------------------------------------
+EthernetServer CPU_Port(80);                                // Create a server listening on port 80.
+HardwareSerial Altitude_Port = Serial1;                     // Altitude Port
+HardwareSerial Azimuth_Port = Serial2;                      // Azimuth Port
+HardwareSerial Focuser_Port = Serial3;                      // Focuser Port
+NeoSWSerial Monitor_Port(Monitor_RX_pin, Monitor_TX_pin);   // Monitor Software Port
+NeoSWSerial Camera_Port(Camera_RX_pin, Camera_TX_pin);      // Camera Software Port
+// Communications Variables -----------------------------------------------------------------------
+char Incoming_CPU_Packet[0xFF];
+char Incoming_Packet_from_Altitude[0xFF];
+char Incoming_Packet_from_Azimuth[0xFF];
+char Incoming_Packet_from_Focuser[0xFF];
+char Incoming_Packet_from_Camera[0xFF];
+char Incoming_Packet_from_Monitor[0xFF];
+char Outgoing_Packet[0xFF];
+unsigned long CPU_Packet_Received_Count = 0;
+unsigned long CPU_Packet_Transmitted_Count = 0;
+unsigned long ALT_Packet_Received_Count = 0;
+unsigned long ALT_Packet_Transmitted_Count = 0;
+unsigned long AZI_Packet_Received_Count = 0;
+unsigned long AZI_Packet_Transmitted_Count = 0;
+unsigned long FOC_Packet_Received_Count = 0;
+unsigned long FOC_Packet_Transmitted_Count = 0;
+unsigned long MON_Packet_Received_Count = 0;
+unsigned long MON_Packet_Transmitted_Count = 0;
+unsigned long CAM_Packet_Received_Count = 0;
+unsigned long CAM_Packet_Transmitted_Count = 0;
+uint8_t CPU_inptr;					    // must be 8 bit uint8_t so that it overflows at 256
+uint8_t CPU_outptr;				        // must be 8 bit uint8_t so that it overflows at 256
+uint8_t CPU_inbuffer[0xff];
+uint8_t CPU_string_ptr;
+uint8_t CPU_packet_length = 0;
 uint8_t Altitude_inptr;					// must be 8 bit uint8_t so that it overflows at 256
-uint8_t Altitude_outptr;					// must be 8 bit uint8_t so that it overflows at 256
+uint8_t Altitude_outptr;				// must be 8 bit uint8_t so that it overflows at 256
 uint8_t Altitude_inbuffer[0xff];
 uint8_t Altitude_string_ptr;
-uint8_t Azimuth_inptr;						// must be 8 bit uint8_t so that it overflows at 256
+uint8_t Altitude_packet_length = 0;
+uint8_t Azimuth_inptr;					// must be 8 bit uint8_t so that it overflows at 256
 uint8_t Azimuth_outptr;					// must be 8 bit uint8_t so that it overflows at 256
 uint8_t Azimuth_inbuffer[0xff];
 uint8_t Azimuth_string_ptr;
+uint8_t Azimuth_packet_length = 0;
 uint8_t Focuser_inptr;
 uint8_t Focuser_outptr;
 uint8_t Focuser_inbuffer[0xff];
 uint8_t Focuser_string_ptr;
-uint8_t Panel_inptr;					// must be 8 bit uint8_t so that it overflows at 256
-uint8_t Panel_outptr;					// must be 8 bit uint8_t so that it overflows at 256
-uint8_t Panel_inbuffer[0xff];
-uint8_t Panel_string_ptr;
-// --------------------------------------------------------------------------------------------------------------------
-struct HubStatusStructure {
-    bool Lights : 1;            // A0
-    bool Fan : 1;		        // A1
-    bool Running : 1;			// A2
-}__attribute__((packed));
-union Status {
-    HubStatusStructure bit;
-    int word;
-};
-volatile Status Hub_Status;
-unsigned long Time_of_Last_Heartbeat = 0;
-unsigned long  Time_of_Last_Connectivity_Check = 0;
-unsigned long Green_Led_Start_Time = 0;
-bool Heartbeat_Enabled = true;
-bool Fan_Enabled = true;
-bool Lights_Enabled = true;
-bool Hub_Heartbeat_to_Operator_Enabled = true;
-bool Hub_Heartbeat_to_Azimuth_Enabled = true;
-bool Hub_Heartbeat_to_Altitude_Enabled = true;
-bool Hub_Heartbeat_to_Focuser_Enabled = true;
-bool Hub_Heartbeat_to_Panel_Enabled = true;
-// Instantiations -----------------------------------------------------------------------------------------------------
-#ifdef INCLUDE_TEMPERATURE
-DHT_Unified Temperature_sensor(Temperature_pin, DHT22);
-DHT_Unified Humidity_sensor(Temperature_pin, DHT22);
+uint8_t Focuser_packet_length = 0;
+uint8_t Monitor_inptr;					// must be 8 bit uint8_t so that it overflows at 256
+uint8_t Monitor_outptr;					// must be 8 bit uint8_t so that it overflows at 256
+uint8_t Monitor_inbuffer[0xff];
+uint8_t Monitor_string_ptr;
+uint8_t Monitor_packet_length = 0;
+uint8_t Camera_inptr;					// must be 8 bit uint8_t so that it overflows at 256
+uint8_t Camera_outptr;					// must be 8 bit uint8_t so that it overflows at 256
+uint8_t Camera_inbuffer[0xff];
+uint8_t Camera_string_ptr;
+uint8_t Camera_packet_length = 0;
+// Packet Fields ----------------------------------------------------------------------------------
+char Packet_Field[MAXIMUM_FIELDS_IN_PACKET][MAX_FIELD_LENGTH]; // space for the decoded command string, used when packet target = hub
+// ------------------------------------------------------------------------------------------------
+uint16_t Device_status = 0;
+enum { OFF = 0, ON = 1 };
+unsigned long RUN_Active_Led_Start_Time = 0;
+// Instantiations ---------------------------------------------------------------------------------
+DHT_Unified Ambient_Sensor(Ambient_Sensor_pin, DHT22);
 sensors_event_t event;
 sensor_t sensor;
-#endif
 Bounce Reset_button = Bounce();
-// Interrupt Service Routines -----------------------------------------------------------------------------------------
+// Interrupt Service Routines ---------------------------------------------------------------------
 void serialEvent1() {
     while (Altitude_Port.available()) {
         Altitude_inbuffer[Altitude_inptr++] = Altitude_Port.read();        // add the received characters to the buffer and increment characters count
@@ -195,32 +190,40 @@ void serialEvent3() {
         Focuser_inbuffer[Focuser_inptr++] = Focuser_Port.read();        // add the received characters to the buffer and increment characters count
     }
 }
-static void handle_Panel_RXChar(uint8_t received) {
-    Panel_inbuffer[Panel_inptr] = received;
-    Panel_inptr++;
+static void handle_Monitor_RXChar(uint8_t received) {
+    Monitor_inbuffer[Monitor_inptr++] = received;
 }
-//-- Setup ------------------------------------------------------------------------------------------------------------
+static void handle_Camera_RXChar(uint8_t received) {
+    Camera_inbuffer[Camera_inptr++] = received;
+}
+//-- Setup ----------------------------------------------------------------------------------------
 void setup() {
     console.begin(115200);
     console_print("Setup Commenced");
-    pinMode(Config_Bit_0_pin, INPUT_PULLUP);    // Configuration pin bit 0
-    pinMode(Config_Bit_1_pin, INPUT_PULLUP);    // Configuration pin bit 1
-    pinMode(Config_Bit_2_pin, INPUT_PULLUP);    // Configuration pin bit 2
-    pinMode(Config_Bit_3_pin, INPUT_PULLUP);    // Configuration pin bit 3
-    pinMode(Config_Bit_4_pin, INPUT_PULLUP);    // Configuration pin bit 4
-    pinMode(Config_Bit_5_pin, INPUT_PULLUP);    // Configuration pin bit 5
-    pinMode(Config_Bit_6_pin, INPUT_PULLUP);    // Configuration pin bit 6
-    pinMode(Config_Bit_7_pin, INPUT_PULLUP);    // Configuration pin bit 7
-    Read_Configuration();
-    //    Operator_Port.begin();                                                 // Start Ethernet
-    console_print("Setup Leds");
-    pinMode(Green_led_pin, OUTPUT);
-    digitalWrite(Green_led_pin, LOW);
-    pinMode(Temperature_pin, INPUT);
+    pinMode(RUN_Active_led_pin, OUTPUT);
+    Led_Control(RUN_Active_led_pin, OFF);
+    CPU_Port.begin();                               // Start Ethernet
+    pinMode(Ambient_Sensor_pin, INPUT);
     pinMode(Voltage_pin, INPUT);
     pinMode(Fan_pin, OUTPUT);                                       // specify the fan pin as an output
+    console_print("Temperature and Humidity Sensor Set Up");
+    sensor_t sensor;
+    Ambient_Sensor.temperature().getSensor(&sensor);
+    console_print("Temperature Sensor: " + String(sensor.name));
+    console_print("Driver Ver:         " + String(sensor.version));
+    console_print("Unique ID:          " + String(sensor.sensor_id));
+    console_print("Max Value:          " + String(sensor.max_value) + " *C");
+    console_print("Min Value:          " + String(sensor.min_value) + " *C");
+    console_print("Resolution:         " + String(sensor.resolution) + " *C");
+    Ambient_Sensor.humidity().getSensor(&sensor);
+    console_print("Humidity Sensor:    " + String(sensor.name));
+    console_print("Driver Ver:         " + String(sensor.version));
+    console_print("Unique ID:          " + String(sensor.sensor_id));
+    console_print("Max Value:          " + String(sensor.max_value) + "%");
+    console_print("Min Value:          " + String(sensor.min_value) + "%");
+    console_print("Resolution:         " + String(sensor.resolution) + "%");
+    console_print("Sensor Setup Complete");
     console_print("Setup Serial Ports");
-    System_Connectivity.word = 0;                                   // nothing attached at the start
     Altitude_Port.begin(Altitude_baud, SERIAL_8N2);					// initialise the Altitude serial port    
     Altitude_Port.flush();                                          // clear the Altitude serial buffer
     console_print("Altitude serial port started");
@@ -230,125 +233,58 @@ void setup() {
     Focuser_Port.begin(Focuser_baud, SERIAL_8N2);					// initialise the Focuser serial port
     Focuser_Port.flush();											// clear the Focuser serial buffer
     console_print("Focuser serial port started");
-    // Software Ports -----------------------------------------------------------------------------------------------------
-    Panel_Port.attachInterrupt(handle_Panel_RXChar);
-    Panel_Port.begin(Panel_baud);
-    console_print("Panel serial port started");
-    console_print("Serial Port Setup Complete");
-    console_print("Checking Connected Devices");
-    Check_Connected_Devices();
+    // Software Ports ------(----------------------------------------------------------------------
+    Camera_Port.attachInterrupt(handle_Camera_RXChar);
+    Camera_Port.begin(Camera_baud);
+    console_print("Camera Port Initialised");
+    Monitor_Port.attachInterrupt(handle_Monitor_RXChar);
+    Monitor_Port.begin(Monitor_baud);
+    console_print("Monitor Port Initialised");
     console_print("Enabling WatchDog Timer");
     wdt_enable(WDTO_4S);                                    // 4 second timeout
     console_print("Setup Complete");
+#ifdef SIMULATE_CPU_INCOMING_PACKETS
+    console_print("Simulating CPU Incoming Packets");
+#endif
+#ifdef SIMULATE_ALT_INCOMING_PACKETS
+    console_print("Simulating ALT Incoming Packets");
+#endif
+#ifdef SIMULATE_AZI_INCOMING_PACKETS
+    console_print("Simulating AZI Incoming Packets");
+#endif
+#ifdef SIMULATE_FOC_INCOMING_PACKETS
+    console_print("Simulating FOC Incoming Packets");
+#endif
+#ifdef SIMULATE_CAM_INCOMING_PACKETS
+    console_print("Simulating CAM Incoming Packets");
+#endif
+#ifdef SIMULATE_MON_INCOMING_PACKETS
+    console_print("Simulating MON Incoming Packets");
+#endif
+    Led_Control(RUN_Active_led_pin, ON);
 } // end setup
 void(*resetFunc) (void) = 0;                                // reset function
-// Main ---------------------------------------------------------------------------------------------------------------
+// Main -------------------------------------------------------------------------------------------
 void loop() {
     wdt_reset();                                                            // keep watch dog timer active
-    Green_Led_Flash();                                                      // toggle the green led
-    if ((Read_Configuration() & Operator_Available) == Operator_Available) if (Check_Operator_Packet()) Process_Incoming_Packet_from_Operator();
-    if ((Read_Configuration() & Altitude_Available) == Altitude_Available) if (Check_Altitude_Packet()) Process_Incoming_Packet_from_Altitude();
-    if ((Read_Configuration() & Azimuth_Available) == Azimuth_Available) if (Check_Azimuth_Packet()) Process_Incoming_Packet_from_Azimuth();
-    if ((Read_Configuration() & Focuser_Available) == Focuser_Available) if (Check_Focuser_Packet()) Process_Incoming_Packet_from_Focuser();
-    if ((Read_Configuration() & Panel_Available) == Panel_Available) if (Check_Panel_Packet()) Process_Incoming_Packet_from_Panel();
-    if ((millis() >= Time_of_Last_Connectivity_Check + Connectivity_Check_Period) || (Time_of_Last_Connectivity_Check == 0)) Check_Connected_Devices();
-}// end of main loop -------------------------------------------------------------------------------------------------
+    Led_Control(RUN_Active_led_pin, ON);
+    if (Check_CPU_Packet_Received()) {
+        if (!Process_CPU_Packet()) {
+            console_print("Bad Packet Received from CPU");
+        }
+    }
+    if (Check_Altitude_Packet_Received()) Copy_Packet_to_CPU(ALT);
+    if (Check_Azimuth_Packet_Received()) Copy_Packet_to_CPU(AZI);
+    if (Check_Focuser_Packet_Received()) Copy_Packet_to_CPU(FOC);
+    if (Check_Camera_Packet_Received()) Copy_Packet_to_CPU(CAM);
+    if (Check_Monitor_Packet_Received()) Copy_Packet_to_CPU(MON);
+    Check_Lights();
+    Update_Environmental_Sensors();
+}// end of main loop ------------------------------------------------------------------------------
 void console_print(String message) {
     console.print(millis(), DEC); console.print("\t"); console.println(message);
 }
-int Read_Configuration() {
-    uint8_t configuration = digitalRead(Config_Bit_0_pin);
-    configuration |= digitalRead(Config_Bit_1_pin) << 1;
-    configuration |= digitalRead(Config_Bit_2_pin) << 2;
-    configuration |= digitalRead(Config_Bit_3_pin) << 3;
-    configuration |= digitalRead(Config_Bit_4_pin) << 4;
-    configuration |= digitalRead(Config_Bit_5_pin) << 5;
-    configuration |= digitalRead(Config_Bit_6_pin) << 6;
-    configuration |= digitalRead(Config_Bit_7_pin) << 7;
-    return configuration;
-}
-void Check_Connected_Devices() {
-    Time_of_Last_Connectivity_Check = millis();
-    // Prepare "Are You Connected" Packet ---------------------------------------------------------------------------------
-    Outgoing_Message.field.Header = STX;	                            // [0] STX
-    Outgoing_Message.field.MessageSource = Device_Hub;                  // [2] target for message
-    Outgoing_Message.field.CommandNumber = Are_You_Connected;		    // [3] command character
-    Outgoing_Message.field.PacketType = GET;		                    // [4] packet type  
-    Outgoing_Message.field.CurrentStatus = System_Connectivity.word;    // [5 - 6]
-    Outgoing_Message.field.ParameterOne = (double)millis();             // [7 - 10]
-    Outgoing_Message.field.ParameterTwo = (double)0;                    // [11 - 14]
-    Outgoing_Message.field.ParameterThree = (double)0;                  // [15 - 18]
-    Outgoing_Message.field.ParameterFour = (double)0;               	// [19 - 22]
-    Outgoing_Message.field.ParameterFive = (double)0;                   // [23 - 26]
-    Outgoing_Message.field.ParameterSix = (double)0;                    // [27 - 30]
-    Outgoing_Message.field.Footer = ETX;		                        // [31] ETX
-    // Packet Created -----------------------------------------------------------------------------------------------------
-    if ((Read_Configuration() & Operator_Available) == Operator_Available) {
-        Outgoing_Message.field.MessageTarget = Device_Operator;             // Set target device
-        for (int i = 0; i <= packet_length; i++) {                          // Transmit the Are You Connected Packet" to the target device
-            while (!Operator_Port.availableForWrite()) {                    // make sure the output port is available
-                delay(5);
-            }
-            Operator_Port.write(Outgoing_Message.character[i]);             // Transmit byte to the Operator Port
-        }
-        System_Connectivity.bit.Operator = false;                           // make the connectivity flag false, will be set by the reply packet 
-        if ((Read_Configuration() & Print_Transmitted) == Print_Transmitted) {
-            console_print("Are You Connected Transmitted to Operator");
-        }
-    }
-    if ((Read_Configuration() & Altitude_Available) == Altitude_Available) {
-        Outgoing_Message.field.MessageTarget = Device_Altitude;             // Set target device
-        for (int i = 0; i <= packet_length; i++) {                          // Transmit the Are You Connected Packet" to the target device
-            while (!Altitude_Port.availableForWrite()) {                    // make sure the output port is available
-                delay(5);
-            }
-            Altitude_Port.write(Outgoing_Message.character[i]);             // Transmit byte to the target Port
-        }
-        System_Connectivity.bit.Altitude = false;                           // make the connectivity flag false, will be set by the reply packet 
-        if ((Read_Configuration() & Print_Transmitted) == Print_Transmitted) {
-            console_print("Are You Connected Transmitted to Altitude");
-        }
-    }
-    if ((Read_Configuration() & Azimuth_Available) == Azimuth_Available) {
-        Outgoing_Message.field.MessageTarget = Device_Azimuth;              // Set target device
-        for (int i = 0; i <= packet_length; i++) {                          // Transmit the Are You Connected Packet" to the target device
-            while (!Azimuth_Port.availableForWrite()) {                     // make sure the output port is available
-                delay(5);
-            }
-            Azimuth_Port.write(Outgoing_Message.character[i]);              // Transmit byte to the target Port
-        }
-        System_Connectivity.bit.Azimuth = false;                            // make the connectivity flag false, will be set by the reply packet 
-        if ((Read_Configuration() & Print_Transmitted) == Print_Transmitted) {
-            console_print("Are You Connected Transmitted to Azimuth");
-        }
-    }
-    if ((Read_Configuration() & Focuser_Available) == Focuser_Available) {
-        Outgoing_Message.field.MessageTarget = Device_Focuser;              // Set target device
-        for (int i = 0; i <= packet_length; i++) {                          // Transmit the Are You Connected Packet" to the target device
-            while (!Focuser_Port.availableForWrite()) {                     // make sure the output port is available
-                delay(5);
-            }
-            Focuser_Port.write(Outgoing_Message.character[i]);              // Transmit byte to the target Port
-        }
-        System_Connectivity.bit.Focuser = false;                            // make the connectivity flag false, will be set by the reply packet 
-        if ((Read_Configuration() & Print_Transmitted) == Print_Transmitted) {
-            console_print("Are You Connected Transmitted to Focuser");
-        }
-    }
-    if ((Read_Configuration() & Panel_Available) == Panel_Available) {
-        Outgoing_Message.field.MessageTarget = Device_Panel;                // Set target device
-        for (int i = 0; i <= packet_length; i++) {                          // Transmit the Are You Connected Packet" to the target device
-            while (!Panel_Port.availableForWrite()) {                       // make sure the output port is available
-                delay(5);
-            }
-            Panel_Port.write(Outgoing_Message.character[i]);                // Transmit byte to the target Port
-        }
-        System_Connectivity.bit.Panel = false;                           // make the connectivity flag false, will be set by the reply packet 
-        if ((Read_Configuration() & Print_Transmitted) == Print_Transmitted) {
-            console_print("Are You Connected Transmitted to Panel");
-        }
-    }
-}
+// Received Character Handling --------------------------------------------------------------------
 void Maintain_Internet() {
     int ethernet_status = (int)Ethernet.maintain();				// keep ethernet link open
     switch (ethernet_status) {
@@ -371,892 +307,678 @@ void Maintain_Internet() {
     }
     }
 }
-void Send_Heartbeat() {
-    UpdateEnvironmentalSensors();
-    Outgoing_Message.field.Header = STX;	                            // [0] STX
-    Outgoing_Message.field.MessageTarget = Device_Operator;	            // [1] source of message
-    Outgoing_Message.field.MessageSource = Device_Hub;                  // [2] target for message
-    Outgoing_Message.field.CommandNumber = Heartbeat;		            // [3] command character
-    Outgoing_Message.field.PacketType = HRT;		                    // [4] packet type  
-    Outgoing_Message.field.CurrentStatus = Hub_Status.word;             // [5 - 6]
-    Outgoing_Message.field.ParameterOne = Ambient_Temperature;          // [7 - 10]
-    Outgoing_Message.field.ParameterTwo = Motor_Voltage;                // [11 - 14]
-    Outgoing_Message.field.ParameterThree = (double)0;                  // [15 - 18]
-    Outgoing_Message.field.ParameterFour = (double)0;               	// [19 - 22]
-    Outgoing_Message.field.ParameterFive = (double)System_Connectivity.word;  // [23 - 26]
-    Outgoing_Message.field.ParameterSix = (double)millis();             // [27 - 30]
-    Outgoing_Message.field.Footer = ETX;		                        // [31] ETX
-    if (System_Connectivity.bit.Operator == true) {
-        if (Hub_Heartbeat_to_Operator_Enabled) {
-            for (int i = 0; i <= packet_length; i++) {
-                Operator_Port.write(Outgoing_Message.character[i]);
-            }
-            console_print("Heartbeat Transmitted to Operator");
-            wdt_reset();                                                // keep watch dog timer active
+bool Check_CPU_Packet_Received(void) {
+#ifdef SIMULATE_CPU_INCOMING_PACKETS
+    if (millis() > CPU_Time_to_Send_Next_Packet) {
+        CPU_Time_to_Send_Next_Packet = millis() + Time_Between_CPU_Packets;
+        for (int i = 0; i < sizeof(Standard_CPU_Packets[CPU_Simulation_Packet_Pointer]); i++) {
+            Incoming_CPU_Packet[i] = Standard_CPU_Packets[CPU_Simulation_Packet_Pointer][i];
         }
+        CPU_packet_length = strlen(Incoming_CPU_Packet);
+        CPU_Simulation_Packet_Pointer++;
+        if (CPU_Simulation_Packet_Pointer > Number_of_Standard_CPU_Packets) CPU_Simulation_Packet_Pointer = 0;
+        bitWrite(Device_status, 1, 1);                          // set CPU Active bit true
+        CPU_Packet_Received_Count++;
+        return true;
     }
-    Time_of_Last_Heartbeat = millis();
-}
-// Received Packet Handling -------------------------------------------------------------------------------------------
-bool Check_Operator_Packet(void) {
+#else
     Maintain_Internet();
-    Operator_Incoming_Packet_Available = false;
-    EthernetClient client = Operator_Port.available();                  // Listen for incoming client requests.
+    EthernetClient client = CPU_Port.available();               // Listen for incoming client requests.
     if (client) {
-        for (int i = 1; i < packet_length - 1; i++) {
-            Incoming_Packet_from_Operator.character[i] = client.read();
-        }
-        Operator_Incoming_Packet_Available = true;
-    }
-    return Operator_Incoming_Packet_Available;
-}
-bool Check_Altitude_Packet(void) {
-    while (Altitude_outptr != Altitude_inptr) { // check Altitude serial buffer for data
-        uint8_t thisbyte = Altitude_inbuffer[Altitude_outptr++];                           // take a characters from the input buffer and increment pointer
-        if ((thisbyte == (char)STX) && (Altitude_string_ptr == 0)) {                    // look for the STX, but only if the output string is empty
-            Incoming_Packet_from_Altitude.character[Altitude_string_ptr++] = STX;      // store the STX and increment the string pointer
-            Altitude_Incoming_Packet_Available = false;
-        }
-        else {
-            if (thisbyte == (char)ETX) {												// characters was not an STX check for ETX
-                Incoming_Packet_from_Altitude.character[Altitude_string_ptr++] = ETX;  // save the ETX and increment the string pointer
-                if (Altitude_string_ptr == packet_length) {                             // does it mean end of packet (we just saved the ETX at 20!
-                    Altitude_string_ptr = 0;                                            // zero the string pointer
-                    Altitude_Incoming_Packet_Available = true;
-                }
+        if (client.available()) {
+            uint8_t thisbyte = client.read();
+            if (thisbyte == (uint8_t)SOH) {
+                CPU_string_ptr = 0;
+                Incoming_CPU_Packet[CPU_string_ptr++] = (uint8_t)SOH;   // store the SOH and increment the string pointer
             }
             else {
-                Incoming_Packet_from_Altitude.character[Altitude_string_ptr++] = thisbyte;       // Not a valid STX or a valid ETX so save it and increment string pointer
+                if (thisbyte == (uint8_t)EOT) {                                 // characters was not an SOH check for ETX
+                    Incoming_CPU_Packet[CPU_string_ptr++] = (uint8_t)EOT;  // save the EOT and increment the string pointer
+                    CPU_packet_length = CPU_string_ptr - 1;
+                    CPU_string_ptr = 0;                                         // zero the string pointer
+                    bitWrite(Device_status, 1, 1);
+                    CPU_Packet_Received_Count++;
+                    return true;
+                }
+                else {
+                    Incoming_CPU_Packet[CPU_string_ptr++] = thisbyte; // Not a control so save it and increment string pointer
+                }
+            }
+        }
+    }
+    return false;
+#endif 
+}
+bool Check_Altitude_Packet_Received(void) {
+#ifdef SIMULATE_ALT_INCOMING_PACKETS
+    if (millis() > ALT_Time_to_Send_Next_Packet) {
+        ALT_Time_to_Send_Next_Packet = millis() + Time_Between_ALT_Packets;
+        for (int i = 0; i < sizeof(Standard_ALT_Packets[ALT_Simulation_Packet_Pointer]); i++) {
+            Incoming_Packet_from_Altitude[i] = Standard_ALT_Packets[ALT_Simulation_Packet_Pointer][i];
+        }
+        Altitude_packet_length = strlen(Incoming_ALT_Packet);
+        ALT_Simulation_Packet_Pointer++;
+        if (ALT_Simulation_Packet_Pointer > Number_of_Standard_ALT_Packets) ALT_Simulation_Packet_Pointer = 0;
+        ALT_Packet_Received_Count++;
+        return true;
+    }
+#else
+    while (Altitude_outptr != Altitude_inptr) {                                 // check Altitude serial buffer for data
+        uint8_t thisbyte = Altitude_inbuffer[Altitude_outptr++];                // take a characters from the input buffer and increment pointer
+        if (thisbyte == (uint8_t)SOH) {                                         // look for the SOH
+            Incoming_Packet_from_Altitude[Altitude_string_ptr++] = (uint8_t)SOH; // store the SOH and increment the string pointer
+        }
+        else {
+            if (thisbyte == (uint8_t)EOT) {                                         // characters was not an SOH check for ETX
+                Incoming_Packet_from_Altitude[Altitude_string_ptr++] = (uint8_t)EOT; // save the EOT and increment the string pointer
+                Altitude_packet_length = Altitude_string_ptr - 1;
+                Altitude_string_ptr = 0;                                            // zero the string pointer
+                ALT_Packet_Received_Count++;
+                return true;
+            }
+            else {
+                Incoming_Packet_from_Altitude[Altitude_string_ptr++] = thisbyte; // Not a control so save it and increment string pointer
             }
         }
     } // end of while Altitude
-    return Altitude_Incoming_Packet_Available;
+    return false;
+#endif
 }
-bool Check_Azimuth_Packet(void) {
-    while (Azimuth_outptr != Azimuth_inptr) {                                        // check Altitude serial buffer for data
-        uint8_t thisbyte = Azimuth_inbuffer[Azimuth_outptr++];                           // take a characters from the input buffer and increment pointer
-        if ((thisbyte == (char)STX) && (Azimuth_string_ptr == 0)) {                    // look for the STX, but only if the output string is empty
-            Incoming_Packet_from_Azimuth.character[Azimuth_string_ptr++] = STX;                // store the STX and increment the string pointer
+bool Check_Azimuth_Packet_Received(void) {
+#ifdef SIMULATE_AZI_INCOMING_PACKETS
+    if (millis() > AZI_Time_to_Send_Next_Packet) {
+        AZI_Time_to_Send_Next_Packet = millis() + Time_Between_AZI_Packets;
+        for (int i = 0; i < sizeof(Standard_AZI_Packets[AZI_Simulation_Packet_Pointer]); i++) {
+            Incoming_Packet_from_Azimuth[i] = Standard_AZI_Packets[AZI_Simulation_Packet_Pointer][i];
+        }
+        Azimuth_packet_length = strlen(Incoming_AZI_Packet);
+        AZI_Simulation_Packet_Pointer++;
+        if (AZI_Simulation_Packet_Pointer > Number_of_Standard_AZI_Packets) AZI_Simulation_Packet_Pointer = 0;
+        AZI_Packet_Received_Count++;
+        return true;
+    }
+#else
+    while (Azimuth_outptr != Azimuth_inptr) {                                   // check Azimuth serial buffer for data
+        uint8_t thisbyte = Azimuth_inbuffer[Azimuth_outptr++];                  // take a characters from the input buffer and increment pointer
+        if (thisbyte == (uint8_t)SOH) {                                         // look for the SOH
+            Incoming_Packet_from_Azimuth[Azimuth_string_ptr++] = (uint8_t)SOH;  // store the SOH and increment the string pointer
         }
         else {
-            if (thisbyte == (char)ETX) {												// characters was not an STX check for ETX
-                Incoming_Packet_from_Azimuth.character[Azimuth_string_ptr++] = ETX;            // save the ETX and increment the string pointer
-                if (Azimuth_string_ptr == packet_length) {                                        // does it mean end of packet (we just saved the ETX at 20!
-                    Azimuth_string_ptr = 0;                                            // zero the string pointer
-                    Azimuth_Incoming_Packet_Available = true;
-                }
+            if (thisbyte == (uint8_t)EOT) {                                          // characters was not an STX check for ETX
+                Incoming_Packet_from_Azimuth[Azimuth_string_ptr++] = (uint8_t)EOT;  // save the EOT and increment the string pointer
+                Azimuth_packet_length = Azimuth_string_ptr - 1;
+                Azimuth_string_ptr = 0;                                             // zero the string pointer
+                AZI_Packet_Received_Count++;
+                return true;
             }
             else {
-                Incoming_Packet_from_Azimuth.character[Azimuth_string_ptr++] = thisbyte;           // Not a valid STX or a valid ETX so save it and increment string pointer
+                Incoming_Packet_from_Azimuth[Azimuth_string_ptr++] = thisbyte;  // Not a control so save it and increment string pointer
             }
         }
     } // end of while Azimuth
-    return Azimuth_Incoming_Packet_Available;
+    return false;
+#endif
 }
-bool Check_Focuser_Packet(void) {
-    while (Focuser_outptr != Focuser_inptr) {											// check Focuser serial buffer for data
-        uint8_t thisbyte = Focuser_inbuffer[Focuser_outptr++];								// take a characters from the input buffer and increment pointer
-        if ((thisbyte == (char)STX) && (Focuser_string_ptr == 0)) {						// look for the STX, but only if the output string is empty
-            Incoming_Packet_from_Focuser.character[Focuser_string_ptr++] = STX;		// store the STX and increment the string pointer
-            Focuser_Incoming_Packet_Available = false;
+bool Check_Focuser_Packet_Received(void) {
+#ifdef SIMULATE_FOC_INCOMING_PACKETS
+    if (millis() > FOC_Time_to_Send_Next_Packet) {
+        FOC_Time_to_Send_Next_Packet = millis() + Time_Between_FOC_Packets;
+        for (int i = 0; i < sizeof(Standard_FOC_Packets[FOC_Simulation_Packet_Pointer]); i++) {
+            Incoming_Packet_from_Focuser[i] = Standard_FOC_Packets[FOC_Simulation_Packet_Pointer][i];
+        }
+        Focuser_packet_length = strlen(Incoming_FOC_Packet);
+        FOC_Simulation_Packet_Pointer++;
+        if (FOC_Simulation_Packet_Pointer > Number_of_Standard_FOC_Packets) FOC_Simulation_Packet_Pointer = 0;
+        FOC_Packet_Received_Count++;
+        return true;
+    }
+#else
+    while (Focuser_outptr != Focuser_inptr) {                                   // check Focuser serial buffer for data
+        uint8_t thisbyte = Focuser_inbuffer[Focuser_outptr++];                  // take a characters from the input buffer and increment pointer
+        if (thisbyte == (char)SOH) {                                            // look for the SOH
+            Incoming_Packet_from_Focuser[Focuser_string_ptr++] = (uint8_t)SOH;  // store the SOH and increment the string pointer
         }
         else {
-            if (thisbyte == (char)ETX) {												// characters was not an STX check for ETX
-                Incoming_Packet_from_Focuser.character[Focuser_string_ptr++] = ETX;     // save the ETX and increment the string pointer
-                if (Focuser_string_ptr == packet_length) {  // does it mean end of packet (we just saved the ETX at 20!
-                    Focuser_string_ptr = 0;												// zero the string pointer
-                    Focuser_Incoming_Packet_Available = true;
-                }
+            if (thisbyte == (char)EOT) {                                            // characters was not an STX check for ETX
+                Incoming_Packet_from_Focuser[Focuser_string_ptr++] = (uint8_t)EOT;  // save the EOT and increment the string pointer
+                Focuser_packet_length = Focuser_string_ptr - 1;
+                Focuser_string_ptr = 0;                                             // zero the string pointer
+                FOC_Packet_Received_Count++;
+                return true;
             }
             else {
-                Incoming_Packet_from_Focuser.character[Focuser_string_ptr++] = thisbyte; // Not a valid STX or a valid ETX so save it and increment string pointer
+                Incoming_Packet_from_Focuser[Focuser_string_ptr++] = thisbyte; // Not a control so save it and increment string pointer
             }
         }
     } // end of while Focuser
-    return Focuser_Incoming_Packet_Available;
-}
-bool Check_Panel_Packet(void) {
-    while (Panel_outptr != Panel_inptr) {                                       // check Altitude serial buffer for data
-        uint8_t thisbyte = Panel_inbuffer[Panel_outptr++];                         // take a characters from the input buffer and increment pointer
-        if ((thisbyte == (char)STX) && (Panel_string_ptr == 0)) {                       // look for the STX, but only if the output string is empty
-            Incoming_Packet_from_Panel.character[Panel_string_ptr++] = STX;    // store the STX and increment the string pointer
-            Panel_Incoming_Packet_Available = false;
-        }
-        else {
-            if (thisbyte == (char)ETX) {												        // characters was not an STX check for ETX
-                Incoming_Packet_from_Panel.character[Panel_string_ptr++] = ETX;// save the ETX and increment the string pointer
-                if (Panel_string_ptr == packet_length) {                                // does it mean end of packet (we just saved the ETX at 20!
-                    Panel_string_ptr = 0;                                               // zero the string pointer
-                    Panel_Incoming_Packet_Available = true;
-                }
-            }
-            else {
-                Incoming_Packet_from_Panel.character[Panel_string_ptr++] = thisbyte;       // Not a valid STX or a valid ETX so save it and increment string pointer
-            }
-        }
-    } // end of while Altitude
-    return Panel_Incoming_Packet_Available;
-}
-// Process Received Packets -------------------------------------------------------------------------------------------
-void Process_Incoming_Packet_from_Operator() {                                    // Process a packet from the Operator  
-    if ((Read_Configuration() & Print_Received) == Print_Received) {
-        console_print("Packet Received from Operator");
-    }
-    System_Connectivity.bit.Operator = true;
-    Operator_Incoming_Packet_Available = false;                                       // clear rhe packet received flag
-    // Packet Received from Operator--------------------------------------------------------------------------------------
-    if (Incoming_Packet_from_Operator.field.MessageTarget == (uint8_t)Device_Altitude) {
-        if (System_Connectivity.bit.Altitude == true) {                        // transmit to the Altitude if connected
-            for (int i = 0; i <= packet_length; i++) {
-                while (!Altitude_Port.availableForWrite()) {
-                    delay(10);
-                }
-                Altitude_Port.write(Incoming_Packet_from_Operator.character[i]);
-            }
-            if ((Read_Configuration() & Print_Transmitted) == Print_Transmitted) {
-                console_print("Packet delivered to Altitude");
-            }
-        }
-        else {
-            if ((Read_Configuration() & Print_Transmitted) == Print_Transmitted) {
-                console_print("Packet not delivered because Target Altitude not connected");
-            }
-        }
-        if (System_Connectivity.bit.Panel == true) {
-            for (int i = 0; i <= packet_length; i++) {
-                while (!Panel_Port.availableForWrite()) {
-                    delay(10);
-                }
-                Panel_Port.write(Incoming_Packet_from_Operator.character[i]);
-            }
-            if ((Read_Configuration() & Print_Transmitted) == Print_Transmitted) {
-                console_print("Packet delivered to Panel");
-            }
-        }
-        else {
-            if ((Read_Configuration() & Print_Transmitted) == Print_Transmitted) {
-                console_print("Packet not delivered because Target Panel not connected");
-            }
-        }
-    }
-    else if (Incoming_Packet_from_Operator.field.MessageTarget == (uint8_t)Device_Azimuth) {
-        if (System_Connectivity.bit.Azimuth == true) {
-            for (int i = 0; i <= packet_length; i++) {
-                while (!Azimuth_Port.availableForWrite()) {
-                    delay(10);
-                }
-                Azimuth_Port.write(Incoming_Packet_from_Operator.character[i]);
-            }
-            if ((Read_Configuration() & Print_Transmitted) == Print_Transmitted) {
-                console_print("Packet delivered to Azimuth");
-            }
-        }
-        else {
-            if ((Read_Configuration() & Print_Transmitted) == Print_Transmitted) {
-                console_print("Packet not delivered because Target Azimuth not connected");
-            }
-        }
-        if (System_Connectivity.bit.Panel == true) {
-            for (int i = 0; i <= packet_length; i++) {
-                while (!Panel_Port.availableForWrite()) {
-                    delay(10);
-                }
-                Panel_Port.write(Incoming_Packet_from_Operator.character[i]);
-            }
-            if ((Read_Configuration() & Print_Transmitted) == Print_Transmitted) {
-                console_print("Packet delivered to Panel");
-            }
-        }
-        else {
-            if ((Read_Configuration() & Print_Transmitted) == Print_Transmitted) {
-                console_print("Packet not delivered because Target Panel not connected");
-            }
-        }
-    }
-    else if (Incoming_Packet_from_Operator.field.MessageTarget == (uint8_t)Device_Focuser) {
-        if (System_Connectivity.bit.Focuser == true) {
-            for (int i = 0; i <= packet_length; i++) {
-                while (!Focuser_Port.availableForWrite()) {
-                    delay(10);
-                }
-                Focuser_Port.write(Incoming_Packet_from_Operator.character[i]);
-            }
-            if ((Read_Configuration() & Print_Transmitted) == Print_Transmitted) {
-                console_print("Packet delivered to Focuser");
-            }
-        }
-        else {
-            if ((Read_Configuration() & Print_Transmitted) == Print_Transmitted) {
-                console_print("Packet not delivered because Target Focuser not connected");
-            }
-        }
-        if (System_Connectivity.bit.Panel == true) {
-            for (int i = 0; i <= packet_length; i++) {
-                while (!Panel_Port.availableForWrite()) {
-                    delay(10);
-                }
-                Panel_Port.write(Incoming_Packet_from_Operator.character[i]);
-            }
-            if ((Read_Configuration() & Print_Transmitted) == Print_Transmitted) {
-                console_print("Packet delivered to Panel");
-            }
-        }
-        else {
-            if ((Read_Configuration() & Print_Transmitted) == Print_Transmitted) {
-                console_print("Packet not delivered because Target Panel not connected");
-            }
-        }
-    }
-    else if (Incoming_Packet_from_Operator.field.MessageTarget == (uint8_t)Device_Hub) {
-        // Target Device = Hub, therefore response required ------------------------------------------------------------------
-        switch ((int)Incoming_Packet_from_Operator.field.CommandNumber) {               // Process cpmmand number    
-        case (int)Request_Firmware_Version: {                                            // request hub firmware version
-            if ((Read_Configuration() & Print_Received) == Print_Received) {
-                console_print("Operator Requested Firmware Version from Hub");
-            }
-            UpdateEnvironmentalSensors();                                               // update the environmental variables
-            Outgoing_Message.field.MessageTarget = Device_Operator;                     // prepare reply packet
-            Outgoing_Message.field.MessageSource = Device_Hub;
-            Outgoing_Message.field.CommandNumber = Request_Firmware_Version;
-            Outgoing_Message.field.PacketType = REP;
-            Outgoing_Message.field.CurrentStatus = Hub_Status.word;
-            Outgoing_Message.field.ParameterOne = (double)Firmware_Version;
-            Outgoing_Message.field.ParameterTwo = (double)0;
-            Outgoing_Message.field.ParameterThree = (double)0;
-            Outgoing_Message.field.ParameterFour = (double)0;
-            Outgoing_Message.field.ParameterFive = (double)freeMemory();
-            Outgoing_Message.field.ParameterSix = (double)millis();
-            if (System_Connectivity.bit.Operator == true) {
-                for (int i = 0; i <= packet_length; i++) {
-                    while (!Operator_Port.availableForWrite()) {
-                        delay(10);
-                    }
-                    Operator_Port.write(Outgoing_Message.character[i]);         // send reply packet to Operator
-                }
-                if ((Read_Configuration() & Print_Transmitted) == Print_Transmitted) {
-                    console_print("Firmware Version Reply sent to the Operator");
-                }
-            }
-            else {
-                if ((Read_Configuration() & Print_Transmitted) == Print_Transmitted) {
-                    console_print("Firmware Verion Reply not sent because Operator not connected");
-                }
-            }
-            if (System_Connectivity.bit.Panel == true) {
-                for (int i = 0; i <= packet_length; i++) {
-                    while (!Panel_Port.availableForWrite()) {
-                        delay(10);
-                    }
-                    Panel_Port.write(Outgoing_Message.character[i]);            // send to Panel
-                }
-                if ((Read_Configuration() & Print_Transmitted) == Print_Transmitted) {
-                    console_print("Operator Request Firmware Verion Reply sent to Panel");
-                }
-            }
-            else {
-                if ((Read_Configuration() & Print_Transmitted) == Print_Transmitted) {
-                    console_print("Operator Request Firmware Version Reply not sent because Panel not connected");
-                }
-            }
-            break;
-        }
-        case (int)Request_Status: {
-            if ((Read_Configuration() & Print_Received) == Print_Received) {
-                console_print("Status Request received from Operator");
-            }
-            UpdateEnvironmentalSensors();
-            Outgoing_Message.field.MessageTarget = Device_Operator;
-            Outgoing_Message.field.MessageSource = Device_Hub;
-            Outgoing_Message.field.CommandNumber = Firmware_Version;
-            Outgoing_Message.field.PacketType = REP;
-            Outgoing_Message.field.CurrentStatus = Hub_Status.word;
-            Outgoing_Message.field.ParameterOne = (double)0;
-            Outgoing_Message.field.ParameterTwo = (double)0;
-            Outgoing_Message.field.ParameterThree = (double)Ambient_Temperature;
-            Outgoing_Message.field.ParameterFour = (double)Motor_Voltage;
-            Outgoing_Message.field.ParameterFive = (double)0;
-            Outgoing_Message.field.ParameterSix = (double)millis();
-            if (System_Connectivity.bit.Operator == true) {
-                for (int i = 0; i <= packet_length; i++) {
-                    while (!Operator_Port.availableForWrite()) {
-                        delay(10);
-                    }
-                    Operator_Port.write(Outgoing_Message.character[i]);
-                }
-                if ((Read_Configuration() & Print_Transmitted) == Print_Transmitted) {
-                    console_print("Status Request Reply Sent to Operator");
-                }
-            }
-            else {
-                if ((Read_Configuration() & Print_Transmitted) == Print_Transmitted) {
-                    console_print("Reply not sent because Operator not connected");
-                }
-            }
-            if (System_Connectivity.bit.Panel == true) {
-                for (int i = 0; i <= packet_length; i++) {
-                    while (!Panel_Port.availableForWrite()) {
-                        delay(10);
-                    }
-                    Panel_Port.write(Outgoing_Message.character[i]);
-                }
-                if ((Read_Configuration() & Print_Transmitted) == Print_Transmitted) {
-                    console_print("Hub Status Request Reply sent to Panel");
-                }
-            }
-            else {
-                if ((Read_Configuration() & Print_Transmitted) == Print_Transmitted) {
-                    console_print("Hub Status Request Reply not sent because Panel not connected");
-                }
-            }
-            break;
-        }
-        case (int)Heartbeat: {
-            if ((Read_Configuration() & Print_Received) == Print_Received) {
-                console_print("Heartbeat Received from Operator");
-            }
-            if (Incoming_Packet_from_Operator.field.PacketType == (uint8_t)SET) {
-                if ((bool)Incoming_Packet_from_Operator.field.ParameterOne == true) {
-                    Hub_Heartbeat_to_Operator_Enabled = true;
-                    if ((Read_Configuration() & Print_Transmitted) == Print_Transmitted) {
-                        console_print("Hub Heartbeat to Operator Enabled");
-                    }
-                }
-                else {
-                    Hub_Heartbeat_to_Operator_Enabled = false;
-                    if ((Read_Configuration() & Print_Transmitted) == Print_Transmitted) {
-                        console_print("Hub Heartbeat to Operator Disabled");
-                    }
-                }
-            }
-            if (System_Connectivity.bit.Panel == true) {
-                for (int i = 0; i <= packet_length; i++) {
-                    while (!Panel_Port.availableForWrite()) {
-                        delay(10);
-                    }
-                    Panel_Port.write(Outgoing_Message.character[i]);
-                }
-                if ((Read_Configuration() & Print_Transmitted) == Print_Transmitted) {
-                    console_print("Operator Heartbeat sent to Panel");
-                }
-            }
-            else {
-                if ((Read_Configuration() & Print_Transmitted) == Print_Transmitted) {
-                    console_print("Operator Heartbeat not sent because Panel not connected");
-                }
-            }
-            break;
-        }
-        case (int)Request_Reset: {
-            if ((Read_Configuration() & Print_Received) == Print_Received) {
-                console_print("Operator Requested Hub Reset");
-            }
-            // no reply required
-            resetFunc();
-        }
-        case (int)Reset_to_Defaults: {
-            if ((Read_Configuration() & Print_Received) == Print_Received) {
-                console_print("Operator Request Hub to Reset to Default Values");
-            }
-            // no reply required
-            break;
-        }
-        case (int)Lights_Fan: {
-            if (Incoming_Packet_from_Operator.field.PacketType == (uint8_t)GET) {                  // GET
-                if ((Read_Configuration() & Print_Received) == Print_Received) {
-                    console_print("Operator Requested Hub's Lights/Fan Status");
-                }
-                Outgoing_Message.field.MessageTarget = Device_Operator;
-                Outgoing_Message.field.MessageSource = Device_Hub;
-                Outgoing_Message.field.CommandNumber = Lights_Fan;
-                Outgoing_Message.field.PacketType = REP;
-                Outgoing_Message.field.CurrentStatus = Hub_Status.word;
-                Outgoing_Message.field.ParameterOne = (double)Lights_Enabled;
-                Outgoing_Message.field.ParameterTwo = (double)Fan_Enabled;
-                Outgoing_Message.field.ParameterThree = (double)0;
-                Outgoing_Message.field.ParameterFour = (double)0;
-                Outgoing_Message.field.ParameterFive = (double)0;
-                Outgoing_Message.field.ParameterSix = (double)0;;
-                if (System_Connectivity.bit.Operator == true) {
-                    for (int i = 0; i <= packet_length; i++) {
-                        while (!Operator_Port.availableForWrite()) {
-                            delay(10);
-                        }
-                        Operator_Port.write(Outgoing_Message.character[i]);
-                    }
-                    if ((Read_Configuration() & Print_Transmitted) == Print_Transmitted) {
-                        console_print("Operator Request for Hub's Lights/Fan Status Reply sent to Operator");
-                    }
-                }
-                else {
-                    if ((Read_Configuration() & Print_Transmitted) == Print_Transmitted) {
-                        console_print("Operator Request for Hub's Lights/Fan Ststua Reply not sent because Operator not connected");
-                    }
-                }
-                if (System_Connectivity.bit.Panel == true) {
-                    for (int i = 0; i <= packet_length; i++) {
-                        while (!Panel_Port.availableForWrite()) {
-                            delay(10);
-                        }
-                        Panel_Port.write(Outgoing_Message.character[i]);
-                    }
-                    if ((Read_Configuration() & Print_Received) == Print_Received) {
-                        console_print("Operator Request for Hub's Light/Fan Status Reply sent to Panel");
-                    }
-                }
-                else {
-                    if ((Read_Configuration() & Print_Received) == Print_Received) {
-                        console_print("Operator Request for Hub's Light/Fan Status Reply not sent because Panel not connected");
-                    }
-                }
-            }
-            else {                                                                          // Set
-                if ((Read_Configuration() & Print_Received) == Print_Received) {
-                    console_print("Operator Attempts to Set Hub's Lights/Fan Status");
-                }
-                Lights_Enabled = (bool)Incoming_Packet_from_Operator.field.ParameterOne;
-                if (Lights_Enabled) {
-                    if ((Read_Configuration() & Print_Received) == Print_Received) {
-                        console_print("Hub Light Enabled by Operator");
-                    }
-                }
-                else {
-                    if ((Read_Configuration() & Print_Received) == Print_Received) {
-                        console_print("Hub Light Disabled by Operator");
-                    }
-                }
-                Fan_Enabled = (bool)Incoming_Packet_from_Operator.field.ParameterTwo;
-                if (Fan_Enabled) {
-                    if ((Read_Configuration() & Print_Received) == Print_Received) {
-                        console_print("Hub Fan Enabled by Operator");
-                    }
-                    digitalWrite(Fan_pin, HIGH);
-                    Hub_Status.bit.Fan = true;
-                }
-                else {
-                    if ((Read_Configuration() & Print_Received) == Print_Received) {
-                        console_print("Hub Fan Disabled by Operator");
-                    }
-                    digitalWrite(Fan_pin, LOW);
-                    Hub_Status.bit.Fan = false;
-                }
-            }
-            break;
-        }
-        case (int)Are_You_Connected: {                                              // Operator asked if Hub is connected
-            if (Incoming_Packet_from_Operator.field.PacketType == GET) {
-                if ((Read_Configuration() & Print_Received) == Print_Received) {
-                    console_print("Operator asked Hub Are you connected");
-                }
-                Outgoing_Message.field.MessageTarget = Device_Operator;
-                Outgoing_Message.field.MessageSource = Device_Hub;
-                Outgoing_Message.field.CommandNumber = Are_You_Connected;
-                Outgoing_Message.field.PacketType = REP;
-                Outgoing_Message.field.CurrentStatus = Hub_Status.word;
-                Outgoing_Message.field.ParameterOne = (double)true;             // Hub is connected
-                Outgoing_Message.field.ParameterTwo = (double)0;
-                Outgoing_Message.field.ParameterThree = (double)0;
-                Outgoing_Message.field.ParameterFour = (double)0;
-                Outgoing_Message.field.ParameterFive = (double)0;
-                Outgoing_Message.field.ParameterSix = (double)millis();;
-                if (System_Connectivity.bit.Operator == true) {
-                    for (int i = 0; i <= packet_length; i++) {
-                        while (!Operator_Port.availableForWrite()) {
-                            delay(10);
-                        }
-                        Operator_Port.write(Outgoing_Message.character[i]);
-                    }
-                    if ((Read_Configuration() & Print_Transmitted) == Print_Transmitted) {
-                        console_print("Hub's Are You Connected Reply sent to Operator");
-                    }
-                }
-                else {
-                    if ((Read_Configuration() & Print_Transmitted) == Print_Transmitted) {
-                        console_print("Reply not sent because Operator not connected");
-                    }
-                }
-                if (System_Connectivity.bit.Panel == true) {
-                    for (int i = 0; i <= packet_length; i++) {
-                        while (!Panel_Port.availableForWrite()) {
-                            delay(10);
-                        }
-                        Panel_Port.write(Outgoing_Message.character[i]);
-                    }
-                    if ((Read_Configuration() & Print_Received) == Print_Received) {
-                        console_print("Operator Request for Hub's Are You Connected Reply sent to Panel");
-                    }
-                }
-                else {
-                    if ((Read_Configuration() & Print_Received) == Print_Received) {
-                        console_print("Operator Request for Hub's Are You Connected Reply not sent to Panel because Panel not connected");
-                    }
-                }
-            }
-            if (Incoming_Packet_from_Operator.field.PacketType == REP) {            // Reply
-                if (Incoming_Packet_from_Operator.field.MessageSource == Device_Operator) {
-                    System_Connectivity.bit.Operator = true;
-                    if ((Read_Configuration() & Print_Received) == Print_Received) {
-                        console_print("Operator Replied to Hub's Are You Connected");
-                    }
-                }
-            }
-            break;
-        }
-        }       // end of switch commandnumber
-    }
-    else if (Incoming_Packet_from_Operator.field.MessageTarget == (uint8_t)Device_AltAzi) {
-        if (System_Connectivity.bit.Altitude == true) {
-            for (int i = 0; i <= packet_length; i++) {
-                while (!Operator_Port.availableForWrite()) {
-                    delay(10);
-                }
-                Altitude_Port.write(Incoming_Packet_from_Operator.character[i]);
-            }
-            if ((Read_Configuration() & Print_Transmitted) == Print_Transmitted) {
-                console_print("Packet delivered to Altitude");
-            }
-        }
-        else {
-            if ((Read_Configuration() & Print_Transmitted) == Print_Transmitted) {
-                console_print("Packet not delivered because Target Altitude not connected");
-            }
-        }
-        if (System_Connectivity.bit.Azimuth == true) {
-            for (int i = 0; i <= packet_length; i++) {
-                while (!Azimuth_Port.availableForWrite()) {
-                    delay(10);
-                }
-                Azimuth_Port.write(Incoming_Packet_from_Operator.character[i]);
-            }
-            if ((Read_Configuration() & Print_Transmitted) == Print_Transmitted) {
-                console_print("Packet sent to Azimuth");
-            }
-        }
-        else {
-            if ((Read_Configuration() & Print_Transmitted) == Print_Transmitted) {
-                console_print("Packet not sent to Azimuth because Azimuth not connected");
-            }
-        }
-        if (System_Connectivity.bit.Panel == true) {
-            for (int i = 0; i <= packet_length; i++) {
-                while (!Panel_Port.availableForWrite()) {
-                    delay(10);
-                }
-                Panel_Port.write(Incoming_Packet_from_Operator.character[i]);
-            }
-            if ((Read_Configuration() & Print_Transmitted) == Print_Transmitted) {
-                console_print("Packet sent to Panel");
-            }
-        }
-        else {
-            if ((Read_Configuration() & Print_Transmitted) == Print_Transmitted) {
-                console_print("Packet not sent to Panel because Panel not connected");
-            }
-        }
-    }
-}
-void Process_Incoming_Packet_from_Altitude() {					            // process an update message from a motor driver  
-    if ((Read_Configuration() & Print_Received) == Print_Received) {
-        console_print("Packet Received from Altitude");
-    }
-    Altitude_Incoming_Packet_Available = false;                            // clear the packet received flag
-    System_Connectivity.bit.Altitude = true;
-    if ((Read_Configuration() & Print_Received) == Print_Received) {
-        console_print("Message Source: " + Device_Names[Incoming_Packet_from_Altitude.field.MessageSource]);    // [1] source of message
-        console_print("Message Target: " + Device_Names[Incoming_Packet_from_Altitude.field.MessageTarget]);    // [2] target of message
-        console_print("Command Number: " + Device_Names[Incoming_Packet_from_Altitude.field.CommandNumber]);    // [3] CommandNumber;
-        console_print("Packet Type: " + Device_Names[Incoming_Packet_from_Altitude.field.PacketType]);          // [4] PacketType;  
-        console_print("Current Status: " + Device_Names[Incoming_Packet_from_Altitude.field.CurrentStatus]);    // [5 - 6] CurrentStatus;
-        console_print("Parameter One: " + String(Incoming_Packet_from_Altitude.field.ParameterOne));            // [7 - 10] ParameterOne;
-        console_print("Parameter Two: " + String(Incoming_Packet_from_Altitude.field.ParameterTwo));            // [11 - 14] ParameterTwo
-        console_print("Parameter Three: " + String(Incoming_Packet_from_Altitude.field.ParameterThree));		// [15 - 18] ParameterThree;
-        console_print("Parameter Four: " + String(Incoming_Packet_from_Altitude.field.ParameterFour));          // [19 - 22] ParameterFour;	
-        console_print("Parameter Five: " + String(Incoming_Packet_from_Altitude.field.ParameterFive));          // [23 - 26]
-        console_print("Parameter Six: " + String(Incoming_Packet_from_Altitude.field.ParameterSix));		    // [27 - 30]
-    }
-    if (System_Connectivity.bit.Operator == true) {                             // transmit to the operator if connected
-        for (int i = 0; i <= packet_length; i++) {
-            while (!Operator_Port.availableForWrite()) {
-                delay(10);
-            }
-            Operator_Port.write(Incoming_Packet_from_Altitude.character[i]);
-        }
-        if ((Read_Configuration() & Print_Transmitted) == Print_Transmitted) {
-            console_print("Packet sent to the Operator");
-        }
-    }
-    else {
-        if ((Read_Configuration() & Print_Transmitted) == Print_Transmitted) {
-            console_print("Packet not sent to Operator because Operator not connected");
-        }
-    }
-    if (System_Connectivity.bit.Panel == true) {                                // transmit to the panel if connected
-        for (int i = 0; i <= packet_length; i++) {
-            while (!Panel_Port.availableForWrite()) {
-                delay(10);
-            }
-            Panel_Port.write(Incoming_Packet_from_Altitude.character[i]);
-        }
-        if ((Read_Configuration() & Print_Transmitted) == Print_Transmitted) {
-            console_print("Packet sent to the Panel");
-        }
-    }
-    else {
-        if ((Read_Configuration() & Print_Transmitted) == Print_Transmitted) {
-            console_print("Packet not sent to Panel because Panel not connected");
-        }
-    }
-}
-void Process_Incoming_Packet_from_Azimuth() {					                // process an update message from the Azimuth motor driver
-    if ((Read_Configuration() & Print_Transmitted) == Print_Transmitted) {
-        console_print("Packet Received from Azimuth");
-    }
-    System_Connectivity.bit.Azimuth = true;                                     // must be connected to the Azimuth
-    Azimuth_Incoming_Packet_Available = false;                                  // clear the packet received flag
-    if ((Read_Configuration() & Print_Received) == Print_Received) {
-        console_print("Message Source: " + Device_Names[Incoming_Packet_from_Azimuth.field.MessageSource]);     // [1] source of message
-        console_print("Message Target: " + Device_Names[Incoming_Packet_from_Azimuth.field.MessageTarget]);     // [2] target of message
-        console_print("Command Number: " + Command_Names[Incoming_Packet_from_Azimuth.field.CommandNumber]);    // [3] CommandNumber;
-        console_print("Packet Type: " + Packet_Type_Names[Incoming_Packet_from_Azimuth.field.PacketType]);      // [4] PacketType;  
-        console_print("Current Status: " + String(Incoming_Packet_from_Azimuth.field.CurrentStatus));           // [5 - 6] CurrentStatus;
-        console_print("Parameter One: " + String(Incoming_Packet_from_Azimuth.field.ParameterOne));             // [7 - 10] ParameterOne;
-        console_print("Parameter Two: " + String(Incoming_Packet_from_Azimuth.field.ParameterTwo));             // [11 - 14] ParameterTwo
-        console_print("Parameter Three: " + String(Incoming_Packet_from_Azimuth.field.ParameterThree));		    // [15 - 18] ParameterThree;
-        console_print("Parameter Four: " + String(Incoming_Packet_from_Azimuth.field.ParameterFour));           // [19 - 22] ParameterFour;	
-        console_print("Parameter Five: " + String(Incoming_Packet_from_Azimuth.field.ParameterFive));           // [23 - 26]
-        console_print("Parameter Six: " + String(Incoming_Packet_from_Azimuth.field.ParameterSix));		        // [27 - 30]
-    }
-    if (Incoming_Packet_from_Azimuth.field.MessageTarget == Device_Operator) {
-        if (System_Connectivity.bit.Operator == true) {                         // transmit to operator if connected
-            for (int i = 0; i <= packet_length; i++) {
-                while (!Operator_Port.availableForWrite()) {
-                    delay(10);
-                }
-                Operator_Port.write(Incoming_Packet_from_Azimuth.character[i]);
-            }
-            if ((Read_Configuration() & Print_Transmitted) == Print_Transmitted) {
-                console_print("Packet sent to Operator");
-            }
-        }
-        else {
-            if ((Read_Configuration() & Print_Transmitted) == Print_Transmitted) {
-                console_print("Packet not sent to Operator because Operator not connected");
-            }
-        }
-        if (System_Connectivity.bit.Panel == true) {                            // transmit to the panel if connected
-            for (int i = 0; i <= packet_length; i++) {
-                while (!Panel_Port.availableForWrite()) {
-                    delay(10);
-                }
-                Panel_Port.write(Incoming_Packet_from_Azimuth.character[i]);
-            }
-            if ((Read_Configuration() & Print_Transmitted) == Print_Transmitted) {
-                console_print("Packet sent to Panel");
-            }
-        }
-        else {
-            if ((Read_Configuration() & Print_Transmitted) == Print_Transmitted) {
-                console_print("Packet not sent to Panel because Panel not connected");
-            }
-        }
-    }
-}
-void Process_Incoming_Packet_from_Focuser() {                                   // process an update message from the Focuser
-    if ((Read_Configuration() & Print_Received) == Print_Received) {
-        console_print("Packet Received from Focuser");
-    }
-    System_Connectivity.bit.Focuser = true;
-    Focuser_Incoming_Packet_Available = false;                                  // clear the packet received flag
-    if ((Read_Configuration() & Print_Received) == Print_Received) {
-        console_print("Message Source: " + Device_Names[Incoming_Packet_from_Focuser.field.MessageSource]);     // [1] source of message
-        console_print("Message Target: " + Device_Names[Incoming_Packet_from_Focuser.field.MessageTarget]);     // [2] target of message
-        console_print("Command Number: " + Command_Names[Incoming_Packet_from_Focuser.field.CommandNumber]);    // [3] CommandNumber;
-        console_print("Packet Type: " + Packet_Type_Names[Incoming_Packet_from_Focuser.field.PacketType]);      // [4] PacketType;  
-        console_print("Current Status: " + String(Incoming_Packet_from_Focuser.field.CurrentStatus));           // [5 - 6] CurrentStatus;
-        console_print("Parameter One: " + String(Incoming_Packet_from_Focuser.field.ParameterOne));             // [7 - 10] ParameterOne;
-        console_print("Parameter Two: " + String(Incoming_Packet_from_Focuser.field.ParameterTwo));             // [11 - 14] ParameterTwo
-        console_print("Parameter Three: " + String(Incoming_Packet_from_Focuser.field.ParameterThree));		    // [15 - 18] ParameterThree;
-        console_print("Parameter Four: " + String(Incoming_Packet_from_Focuser.field.ParameterFour));           // [19 - 22] ParameterFour;	
-        console_print("Parameter Five: " + String(Incoming_Packet_from_Focuser.field.ParameterFive));           // [23 - 26]
-        console_print("Parameter Six: " + String(Incoming_Packet_from_Focuser.field.ParameterSix));		        // [27 - 30]
-    }
-    if (System_Connectivity.bit.Operator == true) {
-        for (int i = 0; i <= packet_length; i++) {                              // copy the received packet to the output devices
-            while (!Operator_Port.availableForWrite()) {
-                delay(10);
-            }
-            Operator_Port.write(Incoming_Packet_from_Focuser.character[i]);     // also send to the Operator
-        }
-        if ((Read_Configuration() & Print_Transmitted) == Print_Transmitted) {
-            console_print("Packet delivered to the Operator");
-        }
-    }
-    else {
-        if ((Read_Configuration() & Print_Transmitted) == Print_Transmitted) {
-            console_print("Packet not delivered because Target Operator not connected");
-        }
-    }
-    if (System_Connectivity.bit.Panel == true) {
-        for (int i = 0; i <= packet_length; i++) {                              // copy the received packet to the output devices
-            while (!Panel_Port.availableForWrite()) {
-                delay(10);
-            }
-            Panel_Port.write(Incoming_Packet_from_Focuser.character[i]);        // also send to the Panel
-        }
-        if ((Read_Configuration() & Print_Transmitted) == Print_Transmitted) {
-            console_print("Packet sent to the Panel");
-        }
-    }
-    else {
-        if ((Read_Configuration() & Print_Transmitted) == Print_Transmitted) {
-            console_print("Packet not sent to the Panel because Panel not connected");
-        }
-    }
-}
-void Process_Incoming_Packet_from_Panel() {
-    if ((Read_Configuration() & Print_Received) == Print_Received) {
-        console_print("Packet Received from the Panel");
-    }
-    System_Connectivity.bit.Panel = true;
-    Panel_Incoming_Packet_Available = false;
-    if ((Read_Configuration() & Print_Received) == Print_Received) {
-        console_print("Message Source: " + Device_Names[Incoming_Packet_from_Panel.field.MessageSource]);     // [1] source of message
-        console_print("Message Target: " + Device_Names[Incoming_Packet_from_Panel.field.MessageTarget]);     // [2] target of message
-        console_print("Command Number: " + Command_Names[Incoming_Packet_from_Panel.field.CommandNumber]);    // [3] CommandNumber;
-        console_print("Packet Type: " + Packet_Type_Names[Incoming_Packet_from_Panel.field.PacketType]);      // [4] PacketType;  
-        console_print("Current Status: " + String(Incoming_Packet_from_Panel.field.CurrentStatus));           // [5 - 6] CurrentStatus;
-        console_print("Parameter One: " + String(Incoming_Packet_from_Panel.field.ParameterOne));             // [7 - 10] ParameterOne;
-        console_print("Parameter Two: " + String(Incoming_Packet_from_Panel.field.ParameterTwo));             // [11 - 14] ParameterTwo
-        console_print("Parameter Three: " + String(Incoming_Packet_from_Panel.field.ParameterThree));		    // [15 - 18] ParameterThree;
-        console_print("Parameter Four: " + String(Incoming_Packet_from_Panel.field.ParameterFour));           // [19 - 22] ParameterFour;	
-        console_print("Parameter Five: " + String(Incoming_Packet_from_Panel.field.ParameterFive));           // [23 - 26]
-        console_print("Parameter Six: " + String(Incoming_Packet_from_Panel.field.ParameterSix));		        // [27 - 30]
-    }
-    if (Incoming_Packet_from_Panel.field.MessageTarget == (uint8_t)Device_Operator) {
-        if (System_Connectivity.bit.Operator == true) {
-            for (int i = 0; i <= packet_length; i++) {
-                while (!Operator_Port.availableForWrite()) {
-                    delay(10);
-                }
-                Operator_Port.write(Incoming_Packet_from_Panel.character[i]);
-            }
-            if ((Read_Configuration() & Print_Transmitted) == Print_Transmitted) {
-                console_print("Packet delivered to Operator");
-            }
-        }
-        else {
-            if ((Read_Configuration() & Print_Transmitted) == Print_Transmitted) {
-                console_print("Packet not sent to Operator because Operator not connected");
-            }
-        }
-    }
-    else if (Incoming_Packet_from_Panel.field.MessageTarget == (uint8_t)Device_Altitude) {
-        if (System_Connectivity.bit.Altitude == true) {
-            for (int i = 0; i <= packet_length; i++) {
-                while (!Altitude_Port.availableForWrite()) {
-                    delay(10);
-                }
-                Altitude_Port.write(Incoming_Packet_from_Panel.character[i]);
-            }
-            if ((Read_Configuration() & Print_Transmitted) == Print_Transmitted) {
-                console_print("Packet from Panel sent to Altitude");
-            }
-        }
-        else {
-            if ((Read_Configuration() & Print_Transmitted) == Print_Transmitted) {
-                console_print("Packet not sent to Altitude because Altitude not connected");
-            }
-        }
-    }
-    else if (Incoming_Packet_from_Panel.field.MessageTarget == (uint8_t)Device_Azimuth) {
-        if (System_Connectivity.bit.Azimuth == true) {
-            for (int i = 0; i <= packet_length; i++) {
-                while (!Azimuth_Port.availableForWrite()) {
-                    delay(10);
-                }
-                Azimuth_Port.write(Incoming_Packet_from_Panel.character[i]);
-            }
-            if ((Read_Configuration() & Print_Transmitted) == Print_Transmitted) {
-                console_print("Packet from Panel sent to Azimuth");
-            }
-        }
-        else {
-            if ((Read_Configuration() & Print_Transmitted) == Print_Transmitted) {
-                console_print("Packet not sent to Azimuth because Azimuth not connected");
-            }
-            }
-        }
-    else if (Incoming_Packet_from_Panel.field.MessageTarget == (uint8_t)Device_Focuser) {
-        if (System_Connectivity.bit.Focuser == true) {
-            for (int i = 0; i <= packet_length; i++) {
-                while (!Focuser_Port.availableForWrite()) {
-                    delay(10);
-                }
-                Focuser_Port.write(Incoming_Packet_from_Panel.character[i]);
-            }
-            if ((Read_Configuration() & Print_Transmitted) == Print_Transmitted) {
-                console_print("Packet from Panel sent to Focuser");
-            }
-        }
-        else {
-            if ((Read_Configuration() & Print_Transmitted) == Print_Transmitted) {
-                console_print("PAcket not sent to Focuser because Focuser not connected");
-            }
-        }
-    }
-    else if (Incoming_Packet_from_Panel.field.MessageTarget == (uint8_t)Device_Hub) {
-        switch ((int)Incoming_Packet_from_Panel.field.CommandNumber) {      // switch
-        case (int)Request_Status: {                                                             // construct reply
-            UpdateEnvironmentalSensors();
-            Outgoing_Message.field.MessageTarget = Device_Panel;
-            Outgoing_Message.field.MessageSource = Device_Hub;
-            Outgoing_Message.field.CommandNumber = Request_Status;
-            Outgoing_Message.field.PacketType = REP;
-            Outgoing_Message.field.CurrentStatus = Hub_Status.word;
-            Outgoing_Message.field.ParameterOne = (double)Firmware_Version;
-            Outgoing_Message.field.ParameterTwo = (double)Ambient_Temperature;
-            Outgoing_Message.field.ParameterThree = (double)Ambient_Humidity;
-            Outgoing_Message.field.ParameterFour = (double)Motor_Voltage;
-            Outgoing_Message.field.ParameterFive = (double)freeMemory();
-            Outgoing_Message.field.ParameterSix = (double)0;
-            if (System_Connectivity.bit.Panel == true) {
-                for (int i = 0; i <= packet_length; i++) {
-                    while (!Panel_Port.availableForWrite()) {
-                        delay(10);
-                    }
-                    Panel_Port.write(Outgoing_Message.character[i]);
-                }
-                if ((Read_Configuration() & Print_Transmitted) == Print_Transmitted) {
-                    console_print("Panel request for Hub Status Reply Sent to Panel");
-                }
-            }
-            else {
-                if ((Read_Configuration() & Print_Transmitted) == Print_Transmitted) {
-                    console_print("Panel request for Hub STatus Reply not sent because Panel not connected");
-                }
-            }
-            break;
-        }       // end of switch commandnumber
-        }                                                                   // end of switch
-    }
-    }
-void UpdateEnvironmentalSensors() {
-#ifdef INCLUDE_TEMPERATURE
-    sensors_event_t event;
-    Temperature_sensor.temperature().getEvent(&event);
-    Humidity_sensor.humidity().getEvent(&event);			// Get humidity event and print its value.
-    Ambient_Temperature = event.temperature;
-    Ambient_Humidity = event.relative_humidity;
-    Motor_Voltage = digitalRead(Voltage_pin);
+    return false;
 #endif
 }
-void Green_Led_Flash() {
-    if (Lights_Enabled) {
-        if (millis() >= Green_Led_Start_Time + Led_On_Time) {
-            digitalWrite(Green_led_pin, !digitalRead(Green_led_pin));       // toggle the green led
+bool Check_Camera_Packet_Received(void) {
+#ifdef SIMULATE_CAM_INCOMING_PACKETS
+    if (millis() > CAM_Time_to_Send_Next_Packet) {
+        CAM_Time_to_Send_Next_Packet = millis() + Time_Between_CAM_Packets;
+        for (int i = 0; i < sizeof(Standard_CAM_Packets[CAM_Simulation_Packet_Pointer]); i++) {
+            Incoming_Packet_from_Camera[i] = Standard_CAM_Packets[CAM_Simulation_Packet_Pointer][i];
         }
+        Camera_packet_length = strlen(Incoming_CAM_Packet);
+        CAM_Simulation_Packet_Pointer++;
+        if (CAM_Simulation_Packet_Pointer > Number_of_Standard_CAM_Packets) CAM_Simulation_Packet_Pointer = 0;
+        CAM_Packet_Received_Count++;
+        return true;
+    }
+#else
+    while (Camera_outptr != Camera_inptr) {                                     // check Altitude serial buffer for data
+        uint8_t thisbyte = Camera_inbuffer[Camera_outptr++];                    // take a characters from the input buffer and increment pointer
+        if (thisbyte == (uint8_t)SOH) {                                         // look for SOH
+            Incoming_Packet_from_Camera[Camera_string_ptr++] = (uint8_t)SOH;    // store the SOH and increment the string pointer
+        }
+        else {
+            if (thisbyte == (char)EOT) {										// characters was not an STX check for ETX
+                Incoming_Packet_from_Camera[Camera_string_ptr++] = (uint8_t)EOT;// save the EOT and increment the string pointer
+                Camera_packet_length = Camera_string_ptr - 1;
+                Camera_string_ptr = 0;                                          // zero the string pointer
+                CAM_Packet_Received_Count++;
+                return true;
+            }
+            else {
+                Incoming_Packet_from_Camera[Camera_string_ptr++] = thisbyte; // Not a EOT so save it and increment string pointer
+            }
+        }
+    } // end of while Camara
+    return false;
+#endif
+}
+bool Check_Monitor_Packet_Received(void) {
+#ifdef SIMULATE_MON_INCOMING_PACKETS
+    if (millis() > MON_Time_to_Send_Next_Packet) {
+        MON_Time_to_Send_Next_Packet = millis() + Time_Between_MON_Packets;
+        for (int i = 0; i < sizeof(Standard_MON_Packets[MON_Simulation_Packet_Pointer]); i++) {
+            Incoming_Packet_from_Monitor[i] = Standard_MON_Packets[MON_Simulation_Packet_Pointer][i];
+        }
+        Monitor_packet_length = strlen(Incoming_MON_Packet);
+        MON_Simulation_Packet_Pointer++;
+        if (MON_Simulation_Packet_Pointer > Number_of_Standard_MON_Packets) MON_Simulation_Packet_Pointer = 0;
+        MON_Packet_Received_Count++;
+        return true;
+    }
+#else
+    while (Monitor_outptr != Monitor_inptr) {                                   // check Altitude serial buffer for data
+        uint8_t thisbyte = Monitor_inbuffer[Monitor_outptr++];                  // take a characters from the input buffer and increment pointer
+        if (thisbyte == (uint8_t)SOH) {                                         // look for SOH
+            Incoming_Packet_from_Monitor[Monitor_string_ptr++] = (uint8_t)SOH;  // store the SOH and increment the string pointer
+        }
+        else {
+            if (thisbyte == (char)EOT) {										// characters was not an STX check for ETX
+                Incoming_Packet_from_Monitor[Monitor_string_ptr++] = (uint8_t)EOT;// save the EOT and increment the string pointer
+                Monitor_string_ptr = 0;                                          // zero the string pointer
+                Monitor_packet_length = Monitor_string_ptr - 1;
+                MON_Packet_Received_Count++;
+                return true;
+            }
+            else {
+                Incoming_Packet_from_Monitor[Monitor_string_ptr++] = thisbyte; // Not a control so save it and increment string pointer
+            }
+        }
+    } // end of while Monitor
+    return false;
+#endif
+}
+// Process Received Packets -----------------------------------------------------------------------
+bool Decode_Fields(char* str, char Packet_Fields[][20]) {
+    uint8_t count = 0;
+    uint8_t packet_size = strlen(str);                              // determine the size of the input packet
+    // 1. Create a temporary array
+    char* temp_command_string = (char*)malloc(packet_size * sizeof(char)); // create a temporary array
+    if (temp_command_string == NULL) {                              // Check if the memory allocation was successful
+        console_print("Memory allocation failed!");
+        while (1);                                                  // Stop the program if memory allocation fails
+    }
+    // 2. Copy the coded message, from the STX to end into the temporary array
+    char* STX_position = strchr(str, (int)STX);                     // determine the position of the STX
+    if (!STX_position) {                                            // if not found return error
+        return false;
     }
     else {
-        digitalWrite(Green_led_pin, LOW);
+        for (int i = (int)STX_position + 1; i < packet_size; i++) { // copy the data part to temp_command_string
+            temp_command_string[count++] = str[i];
+        }
+        // 3.Unpack the fields into character strings Packet_Fields[n]
+        char* token = strtok(temp_command_string, (const char*)&FLD);   // separate the fields into Packet_Fields
+        while (token != NULL) {
+            strcpy(Packet_Fields[count++], token);
+            token = strtok(NULL, (const char*)&FLD);
+        }
+    }
+    free(temp_command_string);                                          // free up the allocated space
+    return true;
+}
+int Obtain_Int_Parameter(char parameter_number) {
+    return atoi(Packet_Field[parameter_number]);
+}
+double Obtain_Float_Parameter(char parameter_number) {
+    return atof(Packet_Field[parameter_number]);
+}
+bool Obtain_Bool_Parameter(char parameter_number) {
+    return (bool)Packet_Field[parameter_number];
+}
+bool Process_CPU_Packet() {                                    // Process a packet from the CPU  
+    console_print("Packet Received from CPU");
+    switch (Incoming_CPU_Packet[1]) {
+    case HUB: {
+        if (!Decode_Fields(Incoming_CPU_Packet, Packet_Field)) {
+            console_print("Corrupt Packet from CPU, target was HUB");
+            return false;
+        }
+        else {
+            console_print("Packet Received from CPU, target was HUB");
+        }
+        switch (Obtain_Int_Parameter(0)) {                              // switch on the Command Number
+        case (Reset): {
+#ifdef SIMULATION
+            console_print("Restart Requested by CPU");
+#endif
+            wdt_enable(WDTO_15MS);  // Enable the watchdog timer with a timeout of 15 ms
+            while (true) {}         // Infinite loop to allow the watchdog to reset the microcontroller
+            break;
+        }
+        case (Environment): {
+            if (Incoming_CPU_Packet[4] == (uint8_t)GET) {
+#ifdef SIMULATION
+                console_print("Environment Get Received from CPU");
+#endif
+                Send_Reply_to_CPU((int)Environment);
+            }
+            else if (Incoming_CPU_Packet[4] == (uint8_t)SET) {
+#ifdef SIMULATION
+                console_print("Environment Set Lights Received from CPU");
+#endif
+                if (Obtain_Bool_Parameter(1)) {
+                    bitWrite(Device_status, 2, 1);
+                }
+                else {
+                    bitWrite(Device_status, 2, 0);
+                }
+            }
+            break;
+        }
+        case (FirmwareVersion): {
+#ifdef SIMULATION
+            console_print("Firmware Version Get Received from HUB");
+#endif
+            Send_Reply_to_CPU((int)Firmware_Version);
+            break;
+        }
+        case (Statistics): {
+#ifdef SIMULATION
+            console_print("Statistics Get Received from HUB");
+#endif
+            Send_Reply_to_CPU((int)Statistics);
+            break;
+        }
+        default: {
+#ifdef SIMULATION
+            console_print("Unknown Command Received from HUB");
+#endif
+            Send_Reply_to_CPU((int)Obtain_Int_Parameter(0));
+            break;
+        }
+        }                                                  // end of switch on command number
+        return true;
+    }                                                       // end of case on command number
+    case ALT: {
+        console_print("Packet Destination Altitude");
+        Transmit_Packet_to_Target((char)ALT, Incoming_Packet_from_Altitude, Altitude_packet_length);
+        break;
+    }
+    case AZI: {
+        console_print("Packet Destination Azimuth");
+        Transmit_Packet_to_Target((char)AZI, Incoming_Packet_from_Azimuth, Azimuth_packet_length);
+        break;
+    }
+    case BTH: {
+        console_print("Packet Destination Both Motors");
+        Transmit_Packet_to_Target((char)ALT, Incoming_Packet_from_Altitude, Altitude_packet_length);
+        Transmit_Packet_to_Target((char)AZI, Incoming_Packet_from_Azimuth, Azimuth_packet_length);
+        break;
+    }
+    case FOC: {
+        console_print("Packet Destination Focuser");
+        Transmit_Packet_to_Target((char)FOC, Incoming_Packet_from_Focuser, Focuser_packet_length);
+        break;
+    }
+    case CAM: {
+        console_print("Packet Destination Camera");
+        Transmit_Packet_to_Target((char)CAM, Incoming_Packet_from_Camera, Camera_packet_length);
+        break;
+    }
+    case MON: {
+        console_print("Packet Destination Monitor");
+        Transmit_Packet_to_Target((char)MON, Incoming_Packet_from_Monitor, Monitor_packet_length);
+        break;
+    }
+    case ALL: {
+        console_print("Packet Destination All Devices");
+        Transmit_Packet_to_Target((char)ALT, Incoming_Packet_from_Altitude, Altitude_packet_length);
+        Transmit_Packet_to_Target((char)AZI, Incoming_Packet_from_Azimuth, Azimuth_packet_length);
+        Transmit_Packet_to_Target((char)FOC, Incoming_Packet_from_Focuser, Focuser_packet_length);
+        Transmit_Packet_to_Target((char)CAM, Incoming_Packet_from_Camera, Camera_packet_length);
+        Transmit_Packet_to_Target((char)MON, Incoming_Packet_from_Monitor, Monitor_packet_length);
+    }
+    }                                                   // end of switch target
+}
+void Copy_Packet_to_CPU(uint8_t target) {    // Send message received from ALT,AZI,FOC,CAM,MON to CPU
+    switch (target) {
+    case ALT: {
+#ifdef PRINT_CONSOLE_MESSAGES
+        console_print("Packet Received from Altitude");
+#endif
+        Transmit_Packet_to_Target(CPU, Incoming_Packet_from_Altitude, Altitude_packet_length);
+        break;
+    }
+    case AZI: {
+#ifdef PRINT_CONSOLE_MESSAGES
+        console_print("Packet Received from Azimuth");
+#endif
+        Transmit_Packet_to_Target(CPU, Incoming_Packet_from_Azimuth, Azimuth_packet_length);
+        break;
+    }
+    case FOC: {
+#ifdef PRINT_CONSOLE_MESSAGES
+        console_print("Packet Received from Focuser");
+#endif
+        Transmit_Packet_to_Target(CPU, Incoming_Packet_from_Focuser, Focuser_packet_length);
+        break;
+    }
+    case CAM: {
+#ifdef PRINT_CONSOLE_MESSAGES
+        console_print("Packet Received from the Camera");
+#endif
+        Transmit_Packet_to_Target(CPU, Incoming_Packet_from_Camera, Camera_packet_length);
+        break;
+    }
+    case MON: {
+#ifdef PRINT_CONSOLE_MESSAGES
+        console_print("Packet Received from the Monitor");
+#endif
+        Transmit_Packet_to_Target(CPU, Incoming_Packet_from_Monitor, Monitor_packet_length);
+        break;
+    }
     }
 }
-// End of Programme----------------------------------------------------------------------------------------------------
+void Send_Reply_to_CPU(int command) {
+    char temp[20];
+    Print_Byte_to_Port(SOH);                        // Byte 0   SOH
+    Print_Byte_to_Port(CPU);                        // Byte 1   Target
+    Print_Byte_to_Port(HUB);                        // Byte 2   Source
+    Print_Byte_to_Port(REP);                        // Byte 3   Packet Type
+    Print_Byte_to_Port(command);                    // Byte 4   Command
+    Print_Byte_to_Port(STX);                        // Byte 5   STX
+    sprintf(temp, "%d", Device_status);
+    Print_String_to_CPU_Port(temp, strlen(temp));   // Byte 6 & 7
+    Print_Byte_to_Port(FLD);                        // Byte 8
+    if (command == Environment) {
+        sprintf(temp, "%.2f", Ambient_Temperature);
+        Print_String_to_CPU_Port(temp, strlen(temp));
+        Print_Byte_to_Port(FLD);
+        sprintf(temp, "%.2f", Ambient_Humidity);
+        Print_String_to_CPU_Port(temp, strlen(temp));
+        Print_Byte_to_Port(FLD);
+        sprintf(temp, "%.2f", Motor_Voltage);
+        Print_String_to_CPU_Port(temp, strlen(temp));
+        Print_Byte_to_Port(FLD);
+    }
+    else if (command == FirmwareVersion) {
+        sprintf(temp, "%.2f", Firmware_Version);
+        Print_String_to_CPU_Port(temp, strlen(temp));
+        Print_Byte_to_Port(FLD);
+    }
+    else if (command == Statistics) {
+        sprintf(temp, "%lu", CPU_Packet_Received_Count);
+        Print_String_to_CPU_Port(temp, strlen(temp));
+        Print_Byte_to_Port(FLD);
+        sprintf(temp, "%lu", CPU_Packet_Transmitted_Count);
+        Print_String_to_CPU_Port(temp, strlen(temp));
+        Print_Byte_to_Port(FLD);
+        sprintf(temp, "%lu", ALT_Packet_Received_Count);
+        Print_String_to_CPU_Port(temp, strlen(temp));
+        Print_Byte_to_Port(FLD);
+        sprintf(temp, "%lu", ALT_Packet_Transmitted_Count);
+        Print_String_to_CPU_Port(temp, strlen(temp));
+        Print_Byte_to_Port(FLD);
+        sprintf(temp, "%lu", AZI_Packet_Received_Count);
+        Print_String_to_CPU_Port(temp, strlen(temp));
+        Print_Byte_to_Port(FLD);
+        sprintf(temp, "%lu", AZI_Packet_Transmitted_Count);
+        Print_String_to_CPU_Port(temp, strlen(temp));
+        Print_Byte_to_Port(FLD);
+        sprintf(temp, "%lu", FOC_Packet_Received_Count);
+        Print_String_to_CPU_Port(temp, strlen(temp));
+        Print_Byte_to_Port(FLD);
+        sprintf(temp, "%lu", FOC_Packet_Transmitted_Count);
+        Print_String_to_CPU_Port(temp, strlen(temp));
+        Print_Byte_to_Port(FLD);
+        sprintf(temp, "%lu", CAM_Packet_Received_Count);
+        Print_String_to_CPU_Port(temp, strlen(temp));
+        Print_Byte_to_Port(FLD);
+        sprintf(temp, "%lu", CAM_Packet_Transmitted_Count);
+        Print_String_to_CPU_Port(temp, strlen(temp));
+        Print_Byte_to_Port(FLD);
+        sprintf(temp, "%lu", MON_Packet_Received_Count);
+        Print_String_to_CPU_Port(temp, strlen(temp));
+        Print_Byte_to_Port(FLD);
+        sprintf(temp, "%lu", MON_Packet_Transmitted_Count);
+        Print_String_to_CPU_Port(temp, strlen(temp));
+        Print_Byte_to_Port(FLD);
+    }
+    Print_Byte_to_Port(ETX);
+    Print_Byte_to_Port(EOT);
+    CPU_Packet_Transmitted_Count++;
+}
+void Print_Byte_to_Port(uint8_t data) {
+    while (!CPU_Port.availableForWrite()) {
+        delay(10);
+    }
+    CPU_Port.print(data);
+}
+void Print_String_to_CPU_Port(char* data, char size) {
+    for (int i = 0; i < size; i++) {
+        while (!CPU_Port.availableForWrite()) {
+            delay(10);
+        }
+        CPU_Port.print(data[i]);
+    }
+}
+void Transmit_Packet_to_Target(char target, char* data, char size) {
+    switch (target) {
+    case CPU: {
+        for (int i = 0; i < size; i++) {
+            while (!CPU_Port.availableForWrite()) {
+                delay(10);
+            }
+            CPU_Port.write(data[i]);
+        }
+#ifdef PRINT_CONSOLE_MESSAGES
+        console.print("Packet sent to CPU");
+#endif
+        CPU_Packet_Transmitted_Count++;
+        break;
+    }
+    case ALT: {
+        for (int i = 0; i < size; i++) {
+            while (!Altitude_Port.availableForWrite()) {
+                delay(10);
+            }
+            Altitude_Port.write(data[i]);
+        }
+#ifdef PRINT_CONSOLE_MESSAGES
+        console.print("Packet sent to Altitude");
+#endif
+        ALT_Packet_Transmitted_Count++;
+        break;
+    }
+    case AZI: {
+        for (int i = 0; i < size; i++) {
+            while (!Azimuth_Port.availableForWrite()) {
+                delay(10);
+            }
+            Azimuth_Port.write(data[i]);
+        }
+#ifdef PRINT_CONSOLE_MESSAGES
+        console.print("Packet sent to Azimuth");
+#endif
+        AZI_Packet_Transmitted_Count++;
+        break;
+    }
+    case BTH: {
+        for (int i = 0; i < size; i++) {
+            while (!Altitude_Port.availableForWrite()) {
+                delay(10);
+            }
+            Altitude_Port.write(data[i]);
+            while (!Azimuth_Port.availableForWrite()) {
+                delay(10);
+            }
+            Azimuth_Port.write(data[i]);
+        }
+#ifdef PRINT_CONSOLE_MESSAGES
+        console.print("Packet sent to Altitude and Azimuth");
+#endif
+        ALT_Packet_Transmitted_Count++;
+        AZI_Packet_Transmitted_Count++;
+        break;
+    }
+    case FOC: {
+        for (int i = 0; i < size; i++) {
+            while (!Focuser_Port.availableForWrite()) {
+                delay(10);
+            }
+            Focuser_Port.write(data[i]);
+        }
+#ifdef PRINT_CONSOLE_MESSAGES
+        console.print("Packet sent to Focuser");
+#endif
+        FOC_Packet_Received_Count++;
+        break;
+    }
+    case CAM: {
+        for (int i = 0; i < size; i++) {
+            while (!Camera_Port.availableForWrite()) {
+                delay(10);
+            }
+            Camera_Port.write(data[i]);
+        }
+#ifdef PRINT_CONSOLE_MESSAGES
+        console.print("Packet sent to Camera");
+#endif
+        CAM_Packet_Transmitted_Count++;
+        break;
+    }
+    case MON: {
+        for (int i = 0; i < size; i++) {
+            while (!Monitor_Port.availableForWrite()) {
+                delay(10);
+            }
+            Monitor_Port.write(data[i]);
+        }
+#ifdef PRINT_CONSOLE_MESSAGES
+        console.print("Packet sent to Monitor");
+#endif
+        MON_Packet_Transmitted_Count++;
+        break;
+    }
+    case ALL: {
+        for (int i = 0; i < size; i++) {
+            while (!Altitude_Port.availableForWrite()) {
+                delay(10);
+            }
+            Altitude_Port.write(data[i]);
+            while (!Azimuth_Port.availableForWrite()) {
+                delay(10);
+            }
+            Azimuth_Port.write(data[i]);
+            while (!Altitude_Port.availableForWrite()) {
+                delay(10);
+            }
+            Azimuth_Port.write(data[i]);
+            while (!Focuser_Port.availableForWrite()) {
+                delay(10);
+            }
+            Focuser_Port.write(data[i]);
+            while (!Camera_Port.availableForWrite()) {
+                delay(10);
+            }
+            Camera_Port.write(data[i]);
+            while (!Monitor_Port.availableForWrite()) {
+                delay(10);
+            }
+            Monitor_Port.write(data[i]);
+        }
+#ifdef PRINT_CONSOLE_MESSAGES
+        console.print("Packet sent to All Devices");
+#endif
+        ALT_Packet_Transmitted_Count++;
+        AZI_Packet_Transmitted_Count++;
+        FOC_Packet_Transmitted_Count++;
+        CAM_Packet_Transmitted_Count++;
+        MON_Packet_Transmitted_Count++;
+        break;
+    }
+    default: {
+        break;
+    }
+    }
+}
+// -------------------------------------------------------------------------------------------------
+void Console_Print(String message) {
+    console.print(millis(), DEC);
+    console.print("\t");
+    console.println(message);
+}
+void Update_Environmental_Sensors() {
+    sensors_event_t event;
+    Ambient_Sensor.temperature().getEvent(&event);
+    Ambient_Sensor.humidity().getEvent(&event);			// Get humidity event and print its value.
+    if (isnan(event.temperature)) {
+        Ambient_Temperature = 0;
+    }
+    else {
+        Ambient_Temperature = event.temperature;
+    }
+    if (isnan(event.relative_humidity)) {
+        Ambient_Humidity = 0;
+    }
+    else {
+        Ambient_Humidity = event.relative_humidity;
+    }
+    Motor_Voltage = digitalRead(Voltage_pin);
+    if (Ambient_Temperature > Fan_Switch_On_Temperature) {          // Turn the fan on if necessary
+        bitWrite(Device_status, 8, 1);
+        digitalWrite(Fan_pin, ON);
+    }
+    else if (Ambient_Temperature < Fan_Switch_Off_Temperature) {     // Turn the fan off if necessary
+        digitalWrite(Fan_pin, OFF);
+        bitWrite(Device_status, 8, 0);
+    }
+}
+void Led_Control(uint8_t led, bool state) {
+    switch (led) {
+    case (RUN_Active_led_pin): {
+        bitWrite(Device_status, 7, 1);
+        break;
+    }
+    }
+}
+void Check_Lights() {
+    if (bitRead(Device_status, 0)) {                                            // are the lights enabled
+        if (bitRead(Device_status, 7)) {                                    // CAM_Active led
+            if (millis() >= RUN_Active_Led_Start_Time + Led_On_Time) {
+                digitalWrite(RUN_Active_led_pin, !digitalRead(RUN_Active_led_pin));       // toggle the CAM_Active led
+            }
+            else {
+                digitalWrite(RUN_Active_led_pin, OFF);                              // turn the CAM_Active led off
+            }
+        }
+    }
+}
+// End of Programme--------------------------------------------------------------------------------
