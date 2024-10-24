@@ -26,15 +26,15 @@ Date		Version Description
 18/07/2023  1.10    Exerciser removed as it's packets should be handled by the Port it is connected to
 20/07/2023  1.11    Introduced configuration piano switch
 01/10/2024  2.0     Development Restarted
-17/10/2024  2.1     Fully packet receipt/transmission simulation introduced
+24/10/2024  2.1     Functionality reduced to support only Hub, Altitude, Azimuth and Focuser communications
 */
 constexpr double Firmware_Version = (double)2.1;
 // Inclusions -------------------------------------------------------------------------------------
 #include <avr/wdt.h>
 #include <Bounce2.h>
-#include <DHT_U.h>
-#include <DHT.h>
 #include <Adafruit_Sensor.h>
+#include <DHT.h>
+#include <DHT_U.h>
 #include <Ethernet2.h>
 #include <util.h>
 #include <EthernetUdp2.h>
@@ -42,29 +42,18 @@ constexpr double Firmware_Version = (double)2.1;
 #include <EthernetClient.h>
 #include <Dns.h>
 #include <Dhcp.h>
-#include <NeoSWSerial.h>
 #include <Hardwareserial.h>
 #define SIMULATE_CPU_INCOMING_PACKETS           // Simulate the receipt of packets from the CPU
 //#define SIMULATE_ALT_INCOMING_PACKETS
 //#define SIMULATE_AZI_INCOMING_PACKETS
 //#define SIMULATE_FOC_INCOMING_PACKETS
-//#define SIMULATE_CAM_INCOMING_PACKETS
-//#define SIMULATE_MON_INCOMING_PACKETS
-#ifdef SIMULATE_CPU_INCOMING_PACKETS
-#define SIMULATION_MODE                         // Common simulation mode to print diagnostic messages
-#endif
 #include <C:\Users\Stephen\Dropbox\Projects\Combined_Telescope\Common_Files\Telescope_Commands.h>
 #define PRINT_CONSOLE_MESSAGES
 #define console Serial
-#ifdef SIMULATE_CPU_INCOMING_PACKETS
-#include <HUB_Simulation.h>
-#endif
 // Constants --------------------------------------------------------------------------------------
 constexpr int Altitude_baud = (int)38400;
 constexpr int Azimuth_baud = (int)38400;
 constexpr int Focuser_baud = (int)38400;
-constexpr int Camera_baud = (int)38400;
-constexpr int Monitor_baud = (int)38400;
 constexpr unsigned long Led_On_Time = (unsigned long)250;
 // Constants ---------------------------------------------------------------------------------------
 uint8_t mac[] = {
@@ -88,14 +77,10 @@ constexpr uint8_t Azimuth_TX_pin = 16;      // Azimuth Port TX
 constexpr uint8_t Azimuth_RX_pin = 17;      // Azimuth Port RX
 constexpr uint8_t Focuser_TX_pin = 14;      // Focuser Port TX
 constexpr uint8_t Focuser_RX_pin = 15;      // Focuser Port RX 
-constexpr uint8_t Monitor_TX_pin = 12;      // Monitor Panel Port TX
-constexpr uint8_t Monitor_RX_pin = 13;      // Monitor Panel Port RX
-constexpr uint8_t Camera_TX_pin = 10;       // Camera Port TX
-constexpr uint8_t Camera_RX_pin = 11;       // Camera Port RX
 // Peripheral Connections --------------------------------------------------------------------------
-constexpr uint8_t RUN_Active_led_pin = 35;  // RUN led
-constexpr uint8_t Ambient_Sensor_pin = 37;	// ambient temperature and humidity pin
-constexpr uint8_t Fan_pin = 39;             // fan (relay) pin
+constexpr uint8_t RUN_Active_led_pin = 3;  // RUN led
+constexpr uint8_t Ambient_Sensor_pin = 4;	// ambient temperature and humidity pin
+constexpr uint8_t Fan_pin = 5;             // fan (relay) pin
 constexpr uint8_t Voltage_pin = A2;         // A2	motor_voltage
 // -------------------------------------------------------------------------------------------------
 constexpr uint8_t MAXIMUM_FIELDS_IN_PACKET = 10;        //
@@ -111,15 +96,11 @@ EthernetServer CPU_Port(80);                                // Create a server l
 HardwareSerial Altitude_Port = Serial1;                     // Altitude Port
 HardwareSerial Azimuth_Port = Serial2;                      // Azimuth Port
 HardwareSerial Focuser_Port = Serial3;                      // Focuser Port
-NeoSWSerial Monitor_Port(Monitor_RX_pin, Monitor_TX_pin);   // Monitor Software Port
-NeoSWSerial Camera_Port(Camera_RX_pin, Camera_TX_pin);      // Camera Software Port
 // Communications Variables -----------------------------------------------------------------------
 char Incoming_CPU_Packet[0xFF];
 char Incoming_Packet_from_Altitude[0xFF];
 char Incoming_Packet_from_Azimuth[0xFF];
 char Incoming_Packet_from_Focuser[0xFF];
-char Incoming_Packet_from_Camera[0xFF];
-char Incoming_Packet_from_Monitor[0xFF];
 char Outgoing_Packet[0xFF];
 unsigned long CPU_Packet_Received_Count = 0;
 unsigned long CPU_Packet_Transmitted_Count = 0;
@@ -129,10 +110,6 @@ unsigned long AZI_Packet_Received_Count = 0;
 unsigned long AZI_Packet_Transmitted_Count = 0;
 unsigned long FOC_Packet_Received_Count = 0;
 unsigned long FOC_Packet_Transmitted_Count = 0;
-unsigned long MON_Packet_Received_Count = 0;
-unsigned long MON_Packet_Transmitted_Count = 0;
-unsigned long CAM_Packet_Received_Count = 0;
-unsigned long CAM_Packet_Transmitted_Count = 0;
 uint8_t CPU_inptr;					    // must be 8 bit uint8_t so that it overflows at 256
 uint8_t CPU_outptr;				        // must be 8 bit uint8_t so that it overflows at 256
 uint8_t CPU_inbuffer[0xff];
@@ -153,16 +130,6 @@ uint8_t Focuser_outptr;
 uint8_t Focuser_inbuffer[0xff];
 uint8_t Focuser_string_ptr;
 uint8_t Focuser_packet_length = 0;
-uint8_t Monitor_inptr;					// must be 8 bit uint8_t so that it overflows at 256
-uint8_t Monitor_outptr;					// must be 8 bit uint8_t so that it overflows at 256
-uint8_t Monitor_inbuffer[0xff];
-uint8_t Monitor_string_ptr;
-uint8_t Monitor_packet_length = 0;
-uint8_t Camera_inptr;					// must be 8 bit uint8_t so that it overflows at 256
-uint8_t Camera_outptr;					// must be 8 bit uint8_t so that it overflows at 256
-uint8_t Camera_inbuffer[0xff];
-uint8_t Camera_string_ptr;
-uint8_t Camera_packet_length = 0;
 // Packet Fields ----------------------------------------------------------------------------------
 char Packet_Field[MAXIMUM_FIELDS_IN_PACKET][MAX_FIELD_LENGTH]; // space for the decoded command string, used when packet target = hub
 // ------------------------------------------------------------------------------------------------
@@ -171,8 +138,6 @@ enum { OFF = 0, ON = 1 };
 unsigned long RUN_Active_Led_Start_Time = 0;
 // Instantiations ---------------------------------------------------------------------------------
 DHT_Unified Ambient_Sensor(Ambient_Sensor_pin, DHT22);
-sensors_event_t event;
-sensor_t sensor;
 Bounce Reset_button = Bounce();
 // Interrupt Service Routines ---------------------------------------------------------------------
 void serialEvent1() {
@@ -190,20 +155,15 @@ void serialEvent3() {
         Focuser_inbuffer[Focuser_inptr++] = Focuser_Port.read();        // add the received characters to the buffer and increment characters count
     }
 }
-static void handle_Monitor_RXChar(uint8_t received) {
-    Monitor_inbuffer[Monitor_inptr++] = received;
-}
-static void handle_Camera_RXChar(uint8_t received) {
-    Camera_inbuffer[Camera_inptr++] = received;
-}
 //-- Setup ----------------------------------------------------------------------------------------
 void setup() {
     console.begin(115200);
     console_print("Setup Commenced");
     pinMode(RUN_Active_led_pin, OUTPUT);
-    Led_Control(RUN_Active_led_pin, OFF);
+    Led_Control(RUN_Active_led_pin, ON);            // turn the run led on
+    console_print("Starting Ethernet");
     CPU_Port.begin();                               // Start Ethernet
-    pinMode(Ambient_Sensor_pin, INPUT);
+    console_print("Ethernet Started");
     pinMode(Voltage_pin, INPUT);
     pinMode(Fan_pin, OUTPUT);                                       // specify the fan pin as an output
     console_print("Temperature and Humidity Sensor Set Up");
@@ -233,13 +193,6 @@ void setup() {
     Focuser_Port.begin(Focuser_baud, SERIAL_8N2);					// initialise the Focuser serial port
     Focuser_Port.flush();											// clear the Focuser serial buffer
     console_print("Focuser serial port started");
-    // Software Ports ------(----------------------------------------------------------------------
-    Camera_Port.attachInterrupt(handle_Camera_RXChar);
-    Camera_Port.begin(Camera_baud);
-    console_print("Camera Port Initialised");
-    Monitor_Port.attachInterrupt(handle_Monitor_RXChar);
-    Monitor_Port.begin(Monitor_baud);
-    console_print("Monitor Port Initialised");
     console_print("Enabling WatchDog Timer");
     wdt_enable(WDTO_4S);                                    // 4 second timeout
     console_print("Setup Complete");
@@ -254,12 +207,6 @@ void setup() {
 #endif
 #ifdef SIMULATE_FOC_INCOMING_PACKETS
     console_print("Simulating FOC Incoming Packets");
-#endif
-#ifdef SIMULATE_CAM_INCOMING_PACKETS
-    console_print("Simulating CAM Incoming Packets");
-#endif
-#ifdef SIMULATE_MON_INCOMING_PACKETS
-    console_print("Simulating MON Incoming Packets");
 #endif
     Led_Control(RUN_Active_led_pin, ON);
 } // end setup
@@ -276,8 +223,6 @@ void loop() {
     if (Check_Altitude_Packet_Received()) Copy_Packet_to_CPU(ALT);
     if (Check_Azimuth_Packet_Received()) Copy_Packet_to_CPU(AZI);
     if (Check_Focuser_Packet_Received()) Copy_Packet_to_CPU(FOC);
-    if (Check_Camera_Packet_Received()) Copy_Packet_to_CPU(CAM);
-    if (Check_Monitor_Packet_Received()) Copy_Packet_to_CPU(MON);
     Check_Lights();
     Update_Environmental_Sensors();
 }// end of main loop ------------------------------------------------------------------------------
@@ -311,9 +256,7 @@ bool Check_CPU_Packet_Received(void) {
 #ifdef SIMULATE_CPU_INCOMING_PACKETS
     if (millis() > CPU_Time_to_Send_Next_Packet) {
         CPU_Time_to_Send_Next_Packet = millis() + Time_Between_CPU_Packets;
-        for (int i = 0; i < sizeof(Standard_CPU_Packets[CPU_Simulation_Packet_Pointer]); i++) {
-            Incoming_CPU_Packet[i] = Standard_CPU_Packets[CPU_Simulation_Packet_Pointer][i];
-        }
+        strcpy(Incoming_CPU_Packet, Standard_CPU_Packets[CPU_Simulation_Packet_Pointer]);
         CPU_packet_length = strlen(Incoming_CPU_Packet);
         CPU_Simulation_Packet_Pointer++;
         if (CPU_Simulation_Packet_Pointer > Number_of_Standard_CPU_Packets) CPU_Simulation_Packet_Pointer = 0;
@@ -321,6 +264,7 @@ bool Check_CPU_Packet_Received(void) {
         CPU_Packet_Received_Count++;
         return true;
     }
+    return false;
 #else
     Maintain_Internet();
     EthernetClient client = CPU_Port.available();               // Listen for incoming client requests.
@@ -454,76 +398,6 @@ bool Check_Focuser_Packet_Received(void) {
     return false;
 #endif
 }
-bool Check_Camera_Packet_Received(void) {
-#ifdef SIMULATE_CAM_INCOMING_PACKETS
-    if (millis() > CAM_Time_to_Send_Next_Packet) {
-        CAM_Time_to_Send_Next_Packet = millis() + Time_Between_CAM_Packets;
-        for (int i = 0; i < sizeof(Standard_CAM_Packets[CAM_Simulation_Packet_Pointer]); i++) {
-            Incoming_Packet_from_Camera[i] = Standard_CAM_Packets[CAM_Simulation_Packet_Pointer][i];
-        }
-        Camera_packet_length = strlen(Incoming_CAM_Packet);
-        CAM_Simulation_Packet_Pointer++;
-        if (CAM_Simulation_Packet_Pointer > Number_of_Standard_CAM_Packets) CAM_Simulation_Packet_Pointer = 0;
-        CAM_Packet_Received_Count++;
-        return true;
-    }
-#else
-    while (Camera_outptr != Camera_inptr) {                                     // check Altitude serial buffer for data
-        uint8_t thisbyte = Camera_inbuffer[Camera_outptr++];                    // take a characters from the input buffer and increment pointer
-        if (thisbyte == (uint8_t)SOH) {                                         // look for SOH
-            Incoming_Packet_from_Camera[Camera_string_ptr++] = (uint8_t)SOH;    // store the SOH and increment the string pointer
-        }
-        else {
-            if (thisbyte == (char)EOT) {										// characters was not an STX check for ETX
-                Incoming_Packet_from_Camera[Camera_string_ptr++] = (uint8_t)EOT;// save the EOT and increment the string pointer
-                Camera_packet_length = Camera_string_ptr - 1;
-                Camera_string_ptr = 0;                                          // zero the string pointer
-                CAM_Packet_Received_Count++;
-                return true;
-            }
-            else {
-                Incoming_Packet_from_Camera[Camera_string_ptr++] = thisbyte; // Not a EOT so save it and increment string pointer
-            }
-        }
-    } // end of while Camara
-    return false;
-#endif
-}
-bool Check_Monitor_Packet_Received(void) {
-#ifdef SIMULATE_MON_INCOMING_PACKETS
-    if (millis() > MON_Time_to_Send_Next_Packet) {
-        MON_Time_to_Send_Next_Packet = millis() + Time_Between_MON_Packets;
-        for (int i = 0; i < sizeof(Standard_MON_Packets[MON_Simulation_Packet_Pointer]); i++) {
-            Incoming_Packet_from_Monitor[i] = Standard_MON_Packets[MON_Simulation_Packet_Pointer][i];
-        }
-        Monitor_packet_length = strlen(Incoming_MON_Packet);
-        MON_Simulation_Packet_Pointer++;
-        if (MON_Simulation_Packet_Pointer > Number_of_Standard_MON_Packets) MON_Simulation_Packet_Pointer = 0;
-        MON_Packet_Received_Count++;
-        return true;
-    }
-#else
-    while (Monitor_outptr != Monitor_inptr) {                                   // check Altitude serial buffer for data
-        uint8_t thisbyte = Monitor_inbuffer[Monitor_outptr++];                  // take a characters from the input buffer and increment pointer
-        if (thisbyte == (uint8_t)SOH) {                                         // look for SOH
-            Incoming_Packet_from_Monitor[Monitor_string_ptr++] = (uint8_t)SOH;  // store the SOH and increment the string pointer
-        }
-        else {
-            if (thisbyte == (char)EOT) {										// characters was not an STX check for ETX
-                Incoming_Packet_from_Monitor[Monitor_string_ptr++] = (uint8_t)EOT;// save the EOT and increment the string pointer
-                Monitor_string_ptr = 0;                                          // zero the string pointer
-                Monitor_packet_length = Monitor_string_ptr - 1;
-                MON_Packet_Received_Count++;
-                return true;
-            }
-            else {
-                Incoming_Packet_from_Monitor[Monitor_string_ptr++] = thisbyte; // Not a control so save it and increment string pointer
-            }
-        }
-    } // end of while Monitor
-    return false;
-#endif
-}
 // Process Received Packets -----------------------------------------------------------------------
 bool Decode_Fields(char* str, char Packet_Fields[][20]) {
     uint8_t count = 0;
@@ -553,14 +427,17 @@ bool Decode_Fields(char* str, char Packet_Fields[][20]) {
     free(temp_command_string);                                          // free up the allocated space
     return true;
 }
-int Obtain_Int_Parameter(char parameter_number) {
+int Obtain_Int_Parameter(int parameter_number) {
     return atoi(Packet_Field[parameter_number]);
 }
-double Obtain_Float_Parameter(char parameter_number) {
+double Obtain_Float_Parameter(int parameter_number) {
     return atof(Packet_Field[parameter_number]);
 }
-bool Obtain_Bool_Parameter(char parameter_number) {
+bool Obtain_Bool_Parameter(int parameter_number) {
     return (bool)Packet_Field[parameter_number];
+}
+long Obtain_Long_Parameter(int parameter_number) {
+    return atol(Packet_Field[parameter_number]);
 }
 bool Process_CPU_Packet() {                                    // Process a packet from the CPU  
     console_print("Packet Received from CPU");
@@ -624,8 +501,7 @@ bool Process_CPU_Packet() {                                    // Process a pack
             break;
         }
         }                                                  // end of switch on command number
-        return true;
-    }                                                       // end of case on command number
+    }
     case ALT: {
         console_print("Packet Destination Altitude");
         Transmit_Packet_to_Target((char)ALT, Incoming_Packet_from_Altitude, Altitude_packet_length);
@@ -647,27 +523,16 @@ bool Process_CPU_Packet() {                                    // Process a pack
         Transmit_Packet_to_Target((char)FOC, Incoming_Packet_from_Focuser, Focuser_packet_length);
         break;
     }
-    case CAM: {
-        console_print("Packet Destination Camera");
-        Transmit_Packet_to_Target((char)CAM, Incoming_Packet_from_Camera, Camera_packet_length);
-        break;
-    }
-    case MON: {
-        console_print("Packet Destination Monitor");
-        Transmit_Packet_to_Target((char)MON, Incoming_Packet_from_Monitor, Monitor_packet_length);
-        break;
-    }
     case ALL: {
         console_print("Packet Destination All Devices");
         Transmit_Packet_to_Target((char)ALT, Incoming_Packet_from_Altitude, Altitude_packet_length);
         Transmit_Packet_to_Target((char)AZI, Incoming_Packet_from_Azimuth, Azimuth_packet_length);
         Transmit_Packet_to_Target((char)FOC, Incoming_Packet_from_Focuser, Focuser_packet_length);
-        Transmit_Packet_to_Target((char)CAM, Incoming_Packet_from_Camera, Camera_packet_length);
-        Transmit_Packet_to_Target((char)MON, Incoming_Packet_from_Monitor, Monitor_packet_length);
-    }
     }                                                   // end of switch target
+    }
+    return true;
 }
-void Copy_Packet_to_CPU(uint8_t target) {    // Send message received from ALT,AZI,FOC,CAM,MON to CPU
+void Copy_Packet_to_CPU(uint8_t target) {    // Send message received from ALT,AZI,FOC
     switch (target) {
     case ALT: {
 #ifdef PRINT_CONSOLE_MESSAGES
@@ -688,20 +553,6 @@ void Copy_Packet_to_CPU(uint8_t target) {    // Send message received from ALT,A
         console_print("Packet Received from Focuser");
 #endif
         Transmit_Packet_to_Target(CPU, Incoming_Packet_from_Focuser, Focuser_packet_length);
-        break;
-    }
-    case CAM: {
-#ifdef PRINT_CONSOLE_MESSAGES
-        console_print("Packet Received from the Camera");
-#endif
-        Transmit_Packet_to_Target(CPU, Incoming_Packet_from_Camera, Camera_packet_length);
-        break;
-    }
-    case MON: {
-#ifdef PRINT_CONSOLE_MESSAGES
-        console_print("Packet Received from the Monitor");
-#endif
-        Transmit_Packet_to_Target(CPU, Incoming_Packet_from_Monitor, Monitor_packet_length);
         break;
     }
     }
@@ -756,18 +607,6 @@ void Send_Reply_to_CPU(int command) {
         Print_String_to_CPU_Port(temp, strlen(temp));
         Print_Byte_to_Port(FLD);
         sprintf(temp, "%lu", FOC_Packet_Transmitted_Count);
-        Print_String_to_CPU_Port(temp, strlen(temp));
-        Print_Byte_to_Port(FLD);
-        sprintf(temp, "%lu", CAM_Packet_Received_Count);
-        Print_String_to_CPU_Port(temp, strlen(temp));
-        Print_Byte_to_Port(FLD);
-        sprintf(temp, "%lu", CAM_Packet_Transmitted_Count);
-        Print_String_to_CPU_Port(temp, strlen(temp));
-        Print_Byte_to_Port(FLD);
-        sprintf(temp, "%lu", MON_Packet_Received_Count);
-        Print_String_to_CPU_Port(temp, strlen(temp));
-        Print_Byte_to_Port(FLD);
-        sprintf(temp, "%lu", MON_Packet_Transmitted_Count);
         Print_String_to_CPU_Port(temp, strlen(temp));
         Print_Byte_to_Port(FLD);
     }
@@ -861,32 +700,6 @@ void Transmit_Packet_to_Target(char target, char* data, char size) {
         FOC_Packet_Received_Count++;
         break;
     }
-    case CAM: {
-        for (int i = 0; i < size; i++) {
-            while (!Camera_Port.availableForWrite()) {
-                delay(10);
-            }
-            Camera_Port.write(data[i]);
-        }
-#ifdef PRINT_CONSOLE_MESSAGES
-        console.print("Packet sent to Camera");
-#endif
-        CAM_Packet_Transmitted_Count++;
-        break;
-    }
-    case MON: {
-        for (int i = 0; i < size; i++) {
-            while (!Monitor_Port.availableForWrite()) {
-                delay(10);
-            }
-            Monitor_Port.write(data[i]);
-        }
-#ifdef PRINT_CONSOLE_MESSAGES
-        console.print("Packet sent to Monitor");
-#endif
-        MON_Packet_Transmitted_Count++;
-        break;
-    }
     case ALL: {
         for (int i = 0; i < size; i++) {
             while (!Altitude_Port.availableForWrite()) {
@@ -905,14 +718,6 @@ void Transmit_Packet_to_Target(char target, char* data, char size) {
                 delay(10);
             }
             Focuser_Port.write(data[i]);
-            while (!Camera_Port.availableForWrite()) {
-                delay(10);
-            }
-            Camera_Port.write(data[i]);
-            while (!Monitor_Port.availableForWrite()) {
-                delay(10);
-            }
-            Monitor_Port.write(data[i]);
         }
 #ifdef PRINT_CONSOLE_MESSAGES
         console.print("Packet sent to All Devices");
@@ -920,8 +725,6 @@ void Transmit_Packet_to_Target(char target, char* data, char size) {
         ALT_Packet_Transmitted_Count++;
         AZI_Packet_Transmitted_Count++;
         FOC_Packet_Transmitted_Count++;
-        CAM_Packet_Transmitted_Count++;
-        MON_Packet_Transmitted_Count++;
         break;
     }
     default: {
@@ -938,13 +741,13 @@ void Console_Print(String message) {
 void Update_Environmental_Sensors() {
     sensors_event_t event;
     Ambient_Sensor.temperature().getEvent(&event);
-    Ambient_Sensor.humidity().getEvent(&event);			// Get humidity event and print its value.
     if (isnan(event.temperature)) {
         Ambient_Temperature = 0;
     }
     else {
         Ambient_Temperature = event.temperature;
     }
+    Ambient_Sensor.humidity().getEvent(&event);			// Get humidity event and print its value.
     if (isnan(event.relative_humidity)) {
         Ambient_Humidity = 0;
     }
@@ -964,14 +767,14 @@ void Update_Environmental_Sensors() {
 void Led_Control(uint8_t led, bool state) {
     switch (led) {
     case (RUN_Active_led_pin): {
-        bitWrite(Device_status, 7, 1);
+        bitWrite(Device_status, 0, 1);
         break;
     }
     }
 }
 void Check_Lights() {
     if (bitRead(Device_status, 0)) {                                            // are the lights enabled
-        if (bitRead(Device_status, 7)) {                                    // CAM_Active led
+        if (bitRead(Device_status, 0)) {                                    // Run_Active led
             if (millis() >= RUN_Active_Led_Start_Time + Led_On_Time) {
                 digitalWrite(RUN_Active_led_pin, !digitalRead(RUN_Active_led_pin));       // toggle the CAM_Active led
             }
