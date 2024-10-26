@@ -27,10 +27,12 @@ Date		Version Description
 20/07/2023  1.11    Introduced configuration piano switch
 01/10/2024  2.0     Development Restarted
 24/10/2024  2.1     Functionality reduced to support only Hub, Altitude, Azimuth and Focuser communications
-*/
-constexpr double Firmware_Version = (double)2.1;
+26/10/2024  2.2     Ethernet protocol changed to TCP
+*/ /
+constexpr double Firmware_Version = (double)2.2;
 // Inclusions -------------------------------------------------------------------------------------
 #include <avr/wdt.h>
+#include <SPI.h>
 #include <Bounce2.h>
 #include <Adafruit_Sensor.h>
 #include <DHT.h>
@@ -56,10 +58,10 @@ constexpr int Azimuth_baud = (int)38400;
 constexpr int Focuser_baud = (int)38400;
 constexpr unsigned long Led_On_Time = (unsigned long)250;
 // Constants ---------------------------------------------------------------------------------------
-uint8_t mac[] = {
-  0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED
-};
+uint8_t mac[] = { 0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED };
+IPAddress server(192, 168, 1, 100);
 IPAddress ip(192, 168, 1, 177);
+constexpr int Maximum_Ethernet_Attempts = 20;
 // Freememory calculater - Returns the current amount of free memory in bytes ----------------------
 extern unsigned int __bss_end;
 extern void* __brkval;
@@ -97,7 +99,7 @@ HardwareSerial Altitude_Port = Serial1;                     // Altitude Port
 HardwareSerial Azimuth_Port = Serial2;                      // Azimuth Port
 HardwareSerial Focuser_Port = Serial3;                      // Focuser Port
 // Communications Variables -----------------------------------------------------------------------
-char Incoming_CPU_Packet[0xFF];
+char Incoming_Packet_from_CPU[0xFF];
 char Incoming_Packet_from_Altitude[0xFF];
 char Incoming_Packet_from_Azimuth[0xFF];
 char Incoming_Packet_from_Focuser[0xFF];
@@ -139,6 +141,7 @@ unsigned long RUN_Active_Led_Start_Time = 0;
 // Instantiations ---------------------------------------------------------------------------------
 DHT_Unified Ambient_Sensor(Ambient_Sensor_pin, DHT22);
 Bounce Reset_button = Bounce();
+EthernetClient client;
 // Interrupt Service Routines ---------------------------------------------------------------------
 void serialEvent1() {
     while (Altitude_Port.available()) {
@@ -162,7 +165,21 @@ void setup() {
     pinMode(RUN_Active_led_pin, OUTPUT);
     Led_Control(RUN_Active_led_pin, ON);            // turn the run led on
     console_print("Starting Ethernet");
-    CPU_Port.begin();                               // Start Ethernet
+    Ethernet.begin(mac, ip);                         // Start Ethernet
+    delay(1000);                                    // delay 1 second to give ethernet time to initialize
+    int Ethernet_Attempts = 0;
+    do {
+        if (client.connect(server, 80)) {
+            console_print("Connected to Ethernet Server");
+        }
+        else {
+            console_print("Not Connected to Ethernet Server, attempt number:" + String(Ethernet_Attempts));
+            if (Ethernet_Attempts++ > Maximum_Ethernet_Attempts) {
+                resetFunc();
+            }
+        }
+        delay(1000);
+    } while (!client.connect(server, 80));
     console_print("Ethernet Started");
     pinMode(Voltage_pin, INPUT);
     pinMode(Fan_pin, OUTPUT);                                       // specify the fan pin as an output
@@ -256,37 +273,34 @@ bool Check_CPU_Packet_Received(void) {
 #ifdef SIMULATE_CPU_INCOMING_PACKETS
     if (millis() > CPU_Time_to_Send_Next_Packet) {
         CPU_Time_to_Send_Next_Packet = millis() + Time_Between_CPU_Packets;
-        strcpy(Incoming_CPU_Packet, Standard_CPU_Packets[CPU_Simulation_Packet_Pointer]);
-        CPU_packet_length = strlen(Incoming_CPU_Packet);
+        strcpy(Incoming_Packet_from_CPU, Standard_CPU_Packets[CPU_Simulation_Packet_Pointer]);
+        CPU_packet_length = strlen(Incoming_Packet_from_CPU);
         CPU_Simulation_Packet_Pointer++;
         if (CPU_Simulation_Packet_Pointer > Number_of_Standard_CPU_Packets) CPU_Simulation_Packet_Pointer = 0;
-        bitWrite(Device_status, 1, 1);                          // set CPU Active bit true
+        bitWrite(Device_status, 1, 1);                                      // set CPU Active bit true
         CPU_Packet_Received_Count++;
         return true;
     }
     return false;
 #else
-    Maintain_Internet();
-    EthernetClient client = CPU_Port.available();               // Listen for incoming client requests.
-    if (client) {
-        if (client.available()) {
-            uint8_t thisbyte = client.read();
-            if (thisbyte == (uint8_t)SOH) {
-                CPU_string_ptr = 0;
-                Incoming_CPU_Packet[CPU_string_ptr++] = (uint8_t)SOH;   // store the SOH and increment the string pointer
+    while (client.available()) {
+        uint8_t thisbyte = client.read();                               // read the character
+        if (thisbyte == (uint8_t)SOH) {                                 // look for start character
+            CPU_string_ptr = 0;                                         // start character received so zero the string pointer
+            Incoming_Packet_from_CPU[CPU_string_ptr++] = (uint8_t)SOH;       // start of packet, store and increment the string pointer
+        }
+        else {
+            if (thisbyte == (uint8_t)EOT) {                             // characters was not an SOH check for ETX
+                Incoming_Packet_from_CPU[CPU_string_ptr++] = (uint8_t)EOT;   // save the EOT and increment the string pointer
+                CPU_packet_length = CPU_string_ptr - 1;                 // record the received packet length
+                CPU_string_ptr = 0;                                     // zero the string pointer
+                bitWrite(Device_status, 1, 1);                          // set the Hub status CPU Active bit
+                CPU_Packet_Received_Count++;                            // increment CPU packets received count
+                Print_Byte_to_CPU_Port(ACK);                            // send a packet receipt to CPU
+                return true;
             }
             else {
-                if (thisbyte == (uint8_t)EOT) {                                 // characters was not an SOH check for ETX
-                    Incoming_CPU_Packet[CPU_string_ptr++] = (uint8_t)EOT;  // save the EOT and increment the string pointer
-                    CPU_packet_length = CPU_string_ptr - 1;
-                    CPU_string_ptr = 0;                                         // zero the string pointer
-                    bitWrite(Device_status, 1, 1);
-                    CPU_Packet_Received_Count++;
-                    return true;
-                }
-                else {
-                    Incoming_CPU_Packet[CPU_string_ptr++] = thisbyte; // Not a control so save it and increment string pointer
-                }
+                Incoming_Packet_from_CPU[CPU_string_ptr++] = thisbyte;       // Not a control so save it and increment string pointer
             }
         }
     }
@@ -441,9 +455,9 @@ long Obtain_Long_Parameter(int parameter_number) {
 }
 bool Process_CPU_Packet() {                                    // Process a packet from the CPU  
     console_print("Packet Received from CPU");
-    switch (Incoming_CPU_Packet[1]) {
+    switch (Incoming_Packet_from_CPU[1]) {
     case HUB: {
-        if (!Decode_Fields(Incoming_CPU_Packet, Packet_Field)) {
+        if (!Decode_Fields(Incoming_Packet_from_CPU, Packet_Field)) {
             console_print("Corrupt Packet from CPU, target was HUB");
             return false;
         }
@@ -460,13 +474,13 @@ bool Process_CPU_Packet() {                                    // Process a pack
             break;
         }
         case (Environment): {
-            if (Incoming_CPU_Packet[4] == (uint8_t)GET) {
+            if (Incoming_Packet_from_CPU[4] == (uint8_t)GET) {
 #ifdef SIMULATION
                 console_print("Environment Get Received from CPU");
 #endif
                 Send_Reply_to_CPU((int)Environment);
             }
-            else if (Incoming_CPU_Packet[4] == (uint8_t)SET) {
+            else if (Incoming_Packet_from_CPU[4] == (uint8_t)SET) {
 #ifdef SIMULATION
                 console_print("Environment Set Lights Received from CPU");
 #endif
@@ -502,32 +516,32 @@ bool Process_CPU_Packet() {                                    // Process a pack
         }
         }                                                  // end of switch on command number
     }
-    case ALT: {
+    case ALT: {                                                     // send the packet to the ALT
         console_print("Packet Destination Altitude");
-        Transmit_Packet_to_Target((char)ALT, Incoming_Packet_from_Altitude, Altitude_packet_length);
+        Transmit_Packet_to_Target((char)ALT, Incoming_Packet_from_CPU, CPU_packet_length);
         break;
     }
     case AZI: {
         console_print("Packet Destination Azimuth");
-        Transmit_Packet_to_Target((char)AZI, Incoming_Packet_from_Azimuth, Azimuth_packet_length);
+        Transmit_Packet_to_Target((char)AZI, Incoming_Packet_from_CPU, CPU_packet_length);
         break;
     }
     case BTH: {
         console_print("Packet Destination Both Motors");
-        Transmit_Packet_to_Target((char)ALT, Incoming_Packet_from_Altitude, Altitude_packet_length);
-        Transmit_Packet_to_Target((char)AZI, Incoming_Packet_from_Azimuth, Azimuth_packet_length);
+        Transmit_Packet_to_Target((char)ALT, Incoming_Packet_from_CPU, CPU_packet_length);
+        Transmit_Packet_to_Target((char)AZI, Incoming_Packet_from_CPU, CPU_packet_length);
         break;
     }
     case FOC: {
         console_print("Packet Destination Focuser");
-        Transmit_Packet_to_Target((char)FOC, Incoming_Packet_from_Focuser, Focuser_packet_length);
+        Transmit_Packet_to_Target((char)FOC, Incoming_Packet_from_CPU, CPU_packet_length);
         break;
     }
     case ALL: {
         console_print("Packet Destination All Devices");
-        Transmit_Packet_to_Target((char)ALT, Incoming_Packet_from_Altitude, Altitude_packet_length);
-        Transmit_Packet_to_Target((char)AZI, Incoming_Packet_from_Azimuth, Azimuth_packet_length);
-        Transmit_Packet_to_Target((char)FOC, Incoming_Packet_from_Focuser, Focuser_packet_length);
+        Transmit_Packet_to_Target((char)ALT, Incoming_Packet_from_CPU, CPU_packet_length);
+        Transmit_Packet_to_Target((char)AZI, Incoming_Packet_from_CPU, CPU_packet_length);
+        Transmit_Packet_to_Target((char)FOC, Incoming_Packet_from_CPU, CPU_packet_length);
     }                                                   // end of switch target
     }
     return true;
@@ -559,73 +573,67 @@ void Copy_Packet_to_CPU(uint8_t target) {    // Send message received from ALT,A
 }
 void Send_Reply_to_CPU(int command) {
     char temp[20];
-    Print_Byte_to_Port(SOH);                        // Byte 0   SOH
-    Print_Byte_to_Port(CPU);                        // Byte 1   Target
-    Print_Byte_to_Port(HUB);                        // Byte 2   Source
-    Print_Byte_to_Port(REP);                        // Byte 3   Packet Type
-    Print_Byte_to_Port(command);                    // Byte 4   Command
-    Print_Byte_to_Port(STX);                        // Byte 5   STX
+    Print_Byte_to_CPU_Port(SOH);                        // Byte 0   SOH
+    Print_Byte_to_CPU_Port(CPU);                        // Byte 1   Target
+    Print_Byte_to_CPU_Port(HUB);                        // Byte 2   Source
+    Print_Byte_to_CPU_Port(REP);                        // Byte 3   Packet Type
+    Print_Byte_to_CPU_Port(command);                    // Byte 4   Command
+    Print_Byte_to_CPU_Port(STX);                        // Byte 5   STX
     sprintf(temp, "%d", Device_status);
     Print_String_to_CPU_Port(temp, strlen(temp));   // Byte 6 & 7
-    Print_Byte_to_Port(FLD);                        // Byte 8
+    Print_Byte_to_CPU_Port(FLD);                        // Byte 8
     if (command == Environment) {
         sprintf(temp, "%.2f", Ambient_Temperature);
         Print_String_to_CPU_Port(temp, strlen(temp));
-        Print_Byte_to_Port(FLD);
+        Print_Byte_to_CPU_Port(FLD);
         sprintf(temp, "%.2f", Ambient_Humidity);
         Print_String_to_CPU_Port(temp, strlen(temp));
-        Print_Byte_to_Port(FLD);
+        Print_Byte_to_CPU_Port(FLD);
         sprintf(temp, "%.2f", Motor_Voltage);
         Print_String_to_CPU_Port(temp, strlen(temp));
-        Print_Byte_to_Port(FLD);
+        Print_Byte_to_CPU_Port(FLD);
     }
     else if (command == FirmwareVersion) {
         sprintf(temp, "%.2f", Firmware_Version);
         Print_String_to_CPU_Port(temp, strlen(temp));
-        Print_Byte_to_Port(FLD);
+        Print_Byte_to_CPU_Port(FLD);
     }
     else if (command == Statistics) {
         sprintf(temp, "%lu", CPU_Packet_Received_Count);
         Print_String_to_CPU_Port(temp, strlen(temp));
-        Print_Byte_to_Port(FLD);
+        Print_Byte_to_CPU_Port(FLD);
         sprintf(temp, "%lu", CPU_Packet_Transmitted_Count);
         Print_String_to_CPU_Port(temp, strlen(temp));
-        Print_Byte_to_Port(FLD);
+        Print_Byte_to_CPU_Port(FLD);
         sprintf(temp, "%lu", ALT_Packet_Received_Count);
         Print_String_to_CPU_Port(temp, strlen(temp));
-        Print_Byte_to_Port(FLD);
+        Print_Byte_to_CPU_Port(FLD);
         sprintf(temp, "%lu", ALT_Packet_Transmitted_Count);
         Print_String_to_CPU_Port(temp, strlen(temp));
-        Print_Byte_to_Port(FLD);
+        Print_Byte_to_CPU_Port(FLD);
         sprintf(temp, "%lu", AZI_Packet_Received_Count);
         Print_String_to_CPU_Port(temp, strlen(temp));
-        Print_Byte_to_Port(FLD);
+        Print_Byte_to_CPU_Port(FLD);
         sprintf(temp, "%lu", AZI_Packet_Transmitted_Count);
         Print_String_to_CPU_Port(temp, strlen(temp));
-        Print_Byte_to_Port(FLD);
+        Print_Byte_to_CPU_Port(FLD);
         sprintf(temp, "%lu", FOC_Packet_Received_Count);
         Print_String_to_CPU_Port(temp, strlen(temp));
-        Print_Byte_to_Port(FLD);
+        Print_Byte_to_CPU_Port(FLD);
         sprintf(temp, "%lu", FOC_Packet_Transmitted_Count);
         Print_String_to_CPU_Port(temp, strlen(temp));
-        Print_Byte_to_Port(FLD);
+        Print_Byte_to_CPU_Port(FLD);
     }
-    Print_Byte_to_Port(ETX);
-    Print_Byte_to_Port(EOT);
+    Print_Byte_to_CPU_Port(ETX);
+    Print_Byte_to_CPU_Port(EOT);
     CPU_Packet_Transmitted_Count++;
 }
-void Print_Byte_to_Port(uint8_t data) {
-    while (!CPU_Port.availableForWrite()) {
-        delay(10);
-    }
-    CPU_Port.print(data);
+void Print_Byte_to_CPU_Port(uint8_t data) {                         // used to send single byte ack to CPU
+    client.println(data);
 }
-void Print_String_to_CPU_Port(char* data, char size) {
+void Print_String_to_CPU_Port(char* data, char size) {              // used to send character string to CPU
     for (int i = 0; i < size; i++) {
-        while (!CPU_Port.availableForWrite()) {
-            delay(10);
-        }
-        CPU_Port.print(data[i]);
+        client.println(data[i]);
     }
 }
 void Transmit_Packet_to_Target(char target, char* data, char size) {

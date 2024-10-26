@@ -12,8 +12,6 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution 
 		..\Common_Files\Telescope_Commands.h = ..\Common_Files\Telescope_Commands.h
 	EndProjectSection
 EndProject
-Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "NeoSWSerial-master", "Libraries\NeoSWSerial-master\NeoSWSerial-master.vcxitems", "{58637DB9-5E69-43F6-AC2F-D6DC2EF8DEFD}"
-EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "Ethernet2-1.0.4", "Libraries\Ethernet2-1.0.4\Ethernet2-1.0.4.vcxitems", "{F3F1FCCC-7242-4BFB-AC2F-A16ADFEE3188}"
 EndProject
 Global
@@ -38,9 +36,7 @@ Global
 		SolutionGuid = {DFB1A216-0EF0-4C6B-93FC-657FFF02D0C6}
 	EndGlobalSection
 	GlobalSection(SharedMSBuildProjectFiles) = preSolution
-		Libraries\NeoSWSerial-master\NeoSWSerial-master.vcxitems*{58637db9-5e69-43f6-ac2f-d6dc2ef8defd}*SharedItemsImports = 9
 		Libraries\Ethernet2-1.0.4\Ethernet2-1.0.4.vcxitems*{c5f80730-f44f-4478-bdae-6634efc2ca88}*SharedItemsImports = 4
-		Libraries\NeoSWSerial-master\NeoSWSerial-master.vcxitems*{c5f80730-f44f-4478-bdae-6634efc2ca88}*SharedItemsImports = 4
 		Libraries\Ethernet2-1.0.4\Ethernet2-1.0.4.vcxitems*{f3f1fccc-7242-4bfb-ac2f-a16adfee3188}*SharedItemsImports = 9
 	EndGlobalSection
 EndGlobal
