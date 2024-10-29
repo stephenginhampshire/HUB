@@ -6,19 +6,20 @@
         Communications to the motor controllers is made through this HUB.
     Functionality:
     1. Receive packets of information from the CPU (Windows PC)
-        a)  If the target is the Hub execute the contained command
-        b)  Otherwise forward the received packet to the indicated target
+        a) Receive packets from CPU and respond with ACK
+        a) If the target is the Hub execute the contained command
+        b) Otherwise forward the received packet to the indicated target
     2. Receive packets of information from the attached devices
         a)  Forward the received packets to the indicated target
 */
 /* Version Control --------------------------------------------------------------------------------
 Date		Version Description
-27/01/2018  1
+27/01/2018  1.0
 11/05/2021	1.1     Updated to be compatible with Telescope and Focuser
 06/11/2021	1.2     Introduction of Panel Functionality, Code Tidy up
 14/07/2022	1.3     Code Tidy Up, made compatible with current telescope commands, status display now via API
 19/08/2022  1.4     Log File Support Added
-21/09/2022  1.5     Log File replaced with logging to serial line 4
+21/09/2022  1.5     Log File replaced with logging to serial line, now removed
 05/02/2023  1.6     Recommenced review
 16/02/2023  1.7     Added Pseudo serial connector so that the Exerciser can emulate the Operator
 09/03/2023  1.8     Ability to selectively send heartbeat messages to the exerciser and/or the panel, they are always sent to Operator
@@ -28,24 +29,22 @@ Date		Version Description
 01/10/2024  2.0     Development Restarted
 24/10/2024  2.1     Functionality reduced to support only Hub, Altitude, Azimuth and Focuser communications
 26/10/2024  2.2     Ethernet protocol changed to TCP
-*/ /
-constexpr double Firmware_Version = (double)2.2;
-// Inclusions -------------------------------------------------------------------------------------
-#include <avr/wdt.h>
-#include <SPI.h>
-#include <Bounce2.h>
-#include <Adafruit_Sensor.h>
+29/10/2024  2.3     Log File re-introduced, all functionality tested, appears to be ok
+*/
+constexpr double Firmware_Version = (double)2.3;
+// -------------------------------------------------------------------------------------------------
 #include <DHT.h>
 #include <DHT_U.h>
-#include <Ethernet2.h>
-#include <util.h>
-#include <EthernetUdp2.h>
-#include <EthernetServer.h>
-#include <EthernetClient.h>
-#include <Dns.h>
-#include <Dhcp.h>
-#include <Hardwareserial.h>
-#define SIMULATE_CPU_INCOMING_PACKETS           // Simulate the receipt of packets from the CPU
+#include <Adafruit_Sensor.h>
+#include <avr/wdt.h>
+#include <avr/io.h>
+#include <Bounce2.h>
+#include <SD.h>
+#include <Ethernet.h>
+#include <SPI.h>
+// Inclusions -------------------------------------------------------------------------------------
+#define PRINT_CPU_INCOMING
+//#define SIMULATE_CPU_INCOMING_PACKETS           // Simulate the receipt of packets from the CPU
 //#define SIMULATE_ALT_INCOMING_PACKETS
 //#define SIMULATE_AZI_INCOMING_PACKETS
 //#define SIMULATE_FOC_INCOMING_PACKETS
@@ -58,10 +57,6 @@ constexpr int Azimuth_baud = (int)38400;
 constexpr int Focuser_baud = (int)38400;
 constexpr unsigned long Led_On_Time = (unsigned long)250;
 // Constants ---------------------------------------------------------------------------------------
-uint8_t mac[] = { 0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED };
-IPAddress server(192, 168, 1, 100);
-IPAddress ip(192, 168, 1, 177);
-constexpr int Maximum_Ethernet_Attempts = 20;
 // Freememory calculater - Returns the current amount of free memory in bytes ----------------------
 extern unsigned int __bss_end;
 extern void* __brkval;
@@ -80,9 +75,13 @@ constexpr uint8_t Azimuth_RX_pin = 17;      // Azimuth Port RX
 constexpr uint8_t Focuser_TX_pin = 14;      // Focuser Port TX
 constexpr uint8_t Focuser_RX_pin = 15;      // Focuser Port RX 
 // Peripheral Connections --------------------------------------------------------------------------
-constexpr uint8_t RUN_Active_led_pin = 3;  // RUN led
-constexpr uint8_t Ambient_Sensor_pin = 4;	// ambient temperature and humidity pin
-constexpr uint8_t Fan_pin = 5;             // fan (relay) pin
+constexpr uint8_t RUN_Active_led_pin = 3;   // RUN led
+constexpr uint8_t SD_CS = 4;                // SD chip select
+constexpr uint8_t Ambient_Sensor_pin = 5;	// ambient temperature and humidity pin
+constexpr uint8_t Fan_pin = 6;              // fan (relay) pin
+constexpr uint8_t Reset_Switch_pin = 7;     // reset switch pin
+constexpr uint8_t Shield_led_pin = 9;       // led on the Ethernet Shield 2
+constexpr uint8_t W5500_CS = 10;            // Ethernet chip select
 constexpr uint8_t Voltage_pin = A2;         // A2	motor_voltage
 // -------------------------------------------------------------------------------------------------
 constexpr uint8_t MAXIMUM_FIELDS_IN_PACKET = 10;        //
@@ -93,11 +92,30 @@ constexpr double Fan_Switch_Off_Temperature = 25.00;    // Temperature at which 
 double Ambient_Temperature = 0;             // Temperature value
 double Ambient_Humidity = 0;                // Humidity value
 double Motor_Voltage = 0;                   // Voltage value
+String LogFileName = "Log.cvs";
+bool Log_File_Active = false;
+String Retrieved_Timestamp;
+String Retrieved_Message;
+File LogFile;
 // Instantiations ---------------------------------------------------------------------------------
-EthernetServer CPU_Port(80);                                // Create a server listening on port 80.
 HardwareSerial Altitude_Port = Serial1;                     // Altitude Port
 HardwareSerial Azimuth_Port = Serial2;                      // Azimuth Port
 HardwareSerial Focuser_Port = Serial3;                      // Focuser Port
+// -------------------------------------------------------------------------------------------------
+byte mac[] = { 0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED };
+IPAddress ip(192, 168, 68, 177);
+IPAddress my_dns(192, 168, 68, 1);
+IPAddress gateway(192, 168, 68, 1);
+IPAddress subnet(255, 255, 0, 0);
+EthernetServer server(80);                                  // Create a server listening on port 80.
+EthernetClient client;                                      // Create an Ethernet Client (CPU)
+// -------------------------------------------------------------------------------------------------
+Sd2Card card;
+SdVolume volume;
+SdFile root;
+// -------------------------------------------------------------------------------------------------
+DHT_Unified Ambient_Sensor(Ambient_Sensor_pin, DHT22);
+Bounce Reset_Switch = Bounce();
 // Communications Variables -----------------------------------------------------------------------
 char Incoming_Packet_from_CPU[0xFF];
 char Incoming_Packet_from_Altitude[0xFF];
@@ -112,9 +130,6 @@ unsigned long AZI_Packet_Received_Count = 0;
 unsigned long AZI_Packet_Transmitted_Count = 0;
 unsigned long FOC_Packet_Received_Count = 0;
 unsigned long FOC_Packet_Transmitted_Count = 0;
-uint8_t CPU_inptr;					    // must be 8 bit uint8_t so that it overflows at 256
-uint8_t CPU_outptr;				        // must be 8 bit uint8_t so that it overflows at 256
-uint8_t CPU_inbuffer[0xff];
 uint8_t CPU_string_ptr;
 uint8_t CPU_packet_length = 0;
 uint8_t Altitude_inptr;					// must be 8 bit uint8_t so that it overflows at 256
@@ -138,10 +153,7 @@ char Packet_Field[MAXIMUM_FIELDS_IN_PACKET][MAX_FIELD_LENGTH]; // space for the 
 uint16_t Device_status = 0;
 enum { OFF = 0, ON = 1 };
 unsigned long RUN_Active_Led_Start_Time = 0;
-// Instantiations ---------------------------------------------------------------------------------
-DHT_Unified Ambient_Sensor(Ambient_Sensor_pin, DHT22);
-Bounce Reset_button = Bounce();
-EthernetClient client;
+unsigned long Shield_Led_Start_Time = 0;
 // Interrupt Service Routines ---------------------------------------------------------------------
 void serialEvent1() {
     while (Altitude_Port.available()) {
@@ -161,80 +173,152 @@ void serialEvent3() {
 //-- Setup ----------------------------------------------------------------------------------------
 void setup() {
     console.begin(115200);
-    console_print("Setup Commenced");
+    delay(1000);
+    console_print(false, "Setup Commenced");
+    Log_File_Active = false;
     pinMode(RUN_Active_led_pin, OUTPUT);
     Led_Control(RUN_Active_led_pin, ON);            // turn the run led on
-    console_print("Starting Ethernet");
-    Ethernet.begin(mac, ip);                         // Start Ethernet
-    delay(1000);                                    // delay 1 second to give ethernet time to initialize
-    int Ethernet_Attempts = 0;
-    do {
-        if (client.connect(server, 80)) {
-            console_print("Connected to Ethernet Server");
-        }
-        else {
-            console_print("Not Connected to Ethernet Server, attempt number:" + String(Ethernet_Attempts));
-            if (Ethernet_Attempts++ > Maximum_Ethernet_Attempts) {
-                resetFunc();
-            }
-        }
-        delay(1000);
-    } while (!client.connect(server, 80));
-    console_print("Ethernet Started");
+    Reset_Switch.attach(Reset_Switch_pin);
+    Reset_Switch.interval(5);
+    pinMode(Shield_led_pin, OUTPUT);
+    console_print(false, "Initialising SD Drive");
+    if (!card.init(SPI_HALF_SPEED, SD_CS)) {
+        console_print(false, "Initialisation Failed");
+        while (1);
+    }
+    else {
+        console_print(false, "\tInitialisation Succeeded");
+        console_print(false, "\tWiring is correct and a card is present.");
+    }
+    switch (card.type()) {
+    case SD_CARD_TYPE_SD1:
+        console_print(false, "\tCard Type: \t\tSD1");
+        break;
+    case SD_CARD_TYPE_SD2:
+        console_print(false, "\tCard Type: \t\tSD2");
+        break;
+    case SD_CARD_TYPE_SDHC:
+        console_print(false, "\tCard Type:\t\tSDHC");
+        break;
+    default:
+        console_print(false, "\tCard Type:\tUnknown");
+    }
+    if (!volume.init(card)) {
+        console_print(false, "\tCould not find FAT16/FAT32 partition.\nMake sure the card is formatted (FAT16/FAT32)");
+        while (1);
+    }
+    console_print(false, "\tTotal Blocks:\t\t" + String(volume.blocksPerCluster() * volume.clusterCount()));
+    uint32_t volumesize;
+    console_print(false, "\tVolume type is:\t\tFAT" + String(volume.fatType()));
+    volumesize = volume.blocksPerCluster();     // clusters are collections of blocks
+    volumesize *= volume.clusterCount() / 2048;   // blocks are always 512 bytes (2 blocks are 1KB)
+    console_print(false, "\tVolume size:\t\t" + String(volumesize) + "(Mb)");
+    //    console_print(false,"Files found on the card (name, date and size in bytes): ");
+    //    root.openRoot(volume);
+    //    root.ls(LS_R | LS_DATE | LS_SIZE);    // list all files in the card with date and size
+    SD.begin(SD_CS);
+    Open_Log_File();
+    console_print(false, "SD Initialisation Complete");
+    console_print(false, "Starting Ethernet Initialisation");
+    Ethernet.begin(mac, ip, my_dns, gateway, subnet);                         // Start Ethernet
+    delay(1000);
+    if (Ethernet.hardwareStatus() == EthernetNoHardware) {
+        console_print(false, "Ethernet Shield not found");
+        while (true);
+    }
+    else {
+        console_print(false, "\tEthernet Shield Found");
+    }
+    if (Ethernet.linkStatus() == LinkOFF) {
+        console_print(false, "\tEthernet cable not connected");
+    }
+    else {
+        console_print(false, "\tEthernet cable connected");
+    }
+    EthernetClient client = server.accept();
+    console_print(false, "Ethernet Initialisation Complete");
     pinMode(Voltage_pin, INPUT);
     pinMode(Fan_pin, OUTPUT);                                       // specify the fan pin as an output
-    console_print("Temperature and Humidity Sensor Set Up");
-    sensor_t sensor;
-    Ambient_Sensor.temperature().getSensor(&sensor);
-    console_print("Temperature Sensor: " + String(sensor.name));
-    console_print("Driver Ver:         " + String(sensor.version));
-    console_print("Unique ID:          " + String(sensor.sensor_id));
-    console_print("Max Value:          " + String(sensor.max_value) + " *C");
-    console_print("Min Value:          " + String(sensor.min_value) + " *C");
-    console_print("Resolution:         " + String(sensor.resolution) + " *C");
-    Ambient_Sensor.humidity().getSensor(&sensor);
-    console_print("Humidity Sensor:    " + String(sensor.name));
-    console_print("Driver Ver:         " + String(sensor.version));
-    console_print("Unique ID:          " + String(sensor.sensor_id));
-    console_print("Max Value:          " + String(sensor.max_value) + "%");
-    console_print("Min Value:          " + String(sensor.min_value) + "%");
-    console_print("Resolution:         " + String(sensor.resolution) + "%");
-    console_print("Sensor Setup Complete");
-    console_print("Setup Serial Ports");
+    console_print(false, "Temperature and Humidity Sensor Initialisation");
+    sensors_event_t event;
+    Ambient_Sensor.temperature().getEvent(&event);
+    if (isnan(event.temperature)) {
+        console_print(false, "\tTemperature Invalid or Sensor not Connected");
+    }
+    else {
+        console_print(false, "\tTemperature Sensor: " + String(event.temperature));
+    }
+    Ambient_Sensor.humidity().getEvent(&event);
+    if (isnan(event.relative_humidity)) {
+        console_print(false, "\tRelative Humidity Invalid or Sensor not Connected");
+    }
+    else {
+        console_print(false, "\tHumidity Sensor:    " + String(event.relative_humidity));
+    }
+    console_print(false, "Sensor Initialisation Complete");
+    console_print(false, "Serial Port Initialisation");
+    pinMode(Altitude_RX_pin, INPUT);
+    if (digitalRead(Altitude_RX_pin)) {
+        console_print(false, "\tAltitude Communication Line Connected");
+    }
+    else {
+        console_print(false, "\tAltitude Communication Line not Connected");
+    }
     Altitude_Port.begin(Altitude_baud, SERIAL_8N2);					// initialise the Altitude serial port    
     Altitude_Port.flush();                                          // clear the Altitude serial buffer
-    console_print("Altitude serial port started");
+    pinMode(Azimuth_RX_pin, INPUT);
+    if (digitalRead(Azimuth_RX_pin)) {
+        console_print(false, "\tAzimuth Communication Line Connected");
+    }
+    else {
+        console_print(false, "\tAzimuth Communication Line not Connected");
+    }
     Azimuth_Port.begin(Azimuth_baud, SERIAL_8N2);					// initialise the Azimuth serial port
     Azimuth_Port.flush();											// clear the Azimuth serial buffer
-    console_print("Azimuth serial port started");
+    pinMode(Focuser_RX_pin, INPUT);
+    if (digitalRead(Focuser_RX_pin)) {
+        console_print(false, "\tFocuser Communication Line Connected");
+    }
+    else {
+        console_print(false, "\tFocuser Communication Line not Connected");
+    }
     Focuser_Port.begin(Focuser_baud, SERIAL_8N2);					// initialise the Focuser serial port
     Focuser_Port.flush();											// clear the Focuser serial buffer
-    console_print("Focuser serial port started");
-    console_print("Enabling WatchDog Timer");
+    console_print(false, "Serial Port Initialisation Complete");
+    console_print(false, "Enabling WatchDog Timer");
     wdt_enable(WDTO_4S);                                    // 4 second timeout
-    console_print("Setup Complete");
+    if (getWdtTimeoutMs()) {
+        console_print(false, "\tCurrent Watchdog Timeout: " + String(getWdtTimeoutMs()) + "mS");
+    }
+    else {
+        console_print(false, "\tWatchdog Timer Initialisation failure");
+    }
+    console_print(false, "Watchdog Timer Initialisation Complete");
 #ifdef SIMULATE_CPU_INCOMING_PACKETS
-    console_print("Simulating CPU Incoming Packets");
+    console_print(false, "Simulating CPU Incoming Packets");
 #endif
 #ifdef SIMULATE_ALT_INCOMING_PACKETS
-    console_print("Simulating ALT Incoming Packets");
+    console_print(false, "Simulating ALT Incoming Packets");
 #endif
 #ifdef SIMULATE_AZI_INCOMING_PACKETS
-    console_print("Simulating AZI Incoming Packets");
+    console_print(false, "Simulating AZI Incoming Packets");
 #endif
 #ifdef SIMULATE_FOC_INCOMING_PACKETS
-    console_print("Simulating FOC Incoming Packets");
+    console_print(false, "Simulating FOC Incoming Packets");
 #endif
     Led_Control(RUN_Active_led_pin, ON);
+    console_print(false, "Logging to SD Drive now Active");
+    Log_File_Active = true;                                     // logging to SD now active
+    console_print(false, "Setup Complete");
 } // end setup
-void(*resetFunc) (void) = 0;                                // reset function
 // Main -------------------------------------------------------------------------------------------
 void loop() {
     wdt_reset();                                                            // keep watch dog timer active
+    Maintain_Internet();
     Led_Control(RUN_Active_led_pin, ON);
     if (Check_CPU_Packet_Received()) {
         if (!Process_CPU_Packet()) {
-            console_print("Bad Packet Received from CPU");
+            console_print(false, "Bad Packet Received from CPU");
         }
     }
     if (Check_Altitude_Packet_Received()) Copy_Packet_to_CPU(ALT);
@@ -243,28 +327,58 @@ void loop() {
     Check_Lights();
     Update_Environmental_Sensors();
 }// end of main loop ------------------------------------------------------------------------------
-void console_print(String message) {
-    console.print(millis(), DEC); console.print("\t"); console.println(message);
+void console_print(bool target, String message) {            // if target == true save to SD drive and display
+    String cleaned_message;
+    if (target) {                                           // strip out \t characters and save to sd drive
+        Serial.print(millis(), DEC);
+        Serial.print("[S]\t");
+        Serial.println(message);                            // display the current message
+        cleaned_message = String(millis()) + " ";
+        for (unsigned int i = 0; i < message.length(); i++) {
+            if (message[i] != '\t') {                       // Check if the character is not a tab
+                cleaned_message += message[i];              // Append character to result if it's not a tab
+            }
+        }
+        Led_Control(Shield_led_pin, ON);
+        LogFile = SD.open("/log.csv", FILE_WRITE);          // save the cleaned message to SD
+        if (LogFile) {
+            LogFile.print(millis(), DEC);
+            LogFile.print(",");
+            LogFile.println(cleaned_message);
+            LogFile.close();
+            LogFile.flush();
+        }
+        else {
+            console_print(false, "Log File Write Failed");
+            while (1);
+        }
+    }
+    else {
+        Serial.print(millis(), DEC);
+        Serial.print("[D]\t");
+        Serial.println(message);     // display the current message
+    }
+    Led_Control(Shield_led_pin, OFF);
 }
 // Received Character Handling --------------------------------------------------------------------
 void Maintain_Internet() {
-    int ethernet_status = (int)Ethernet.maintain();				// keep ethernet link open
+    int ethernet_status = (int)Ethernet.maintain();     // keep ethernet link open
     switch (ethernet_status) {
-    case 0: {						// nothing happened
+    case 0: {                                           // nothing happened
         break;
     }
-    case 1: {						// renew failed
-        Ethernet.begin(mac);
+    case 1: {                                           // renew failed
+        Ethernet.begin(mac, ip);                        // Start Ethernet
         break;
     }
-    case 2: {						// renew success
+    case 2: {                                           // renew success
         break;
     }
-    case 3: {						// rebind fail
-        Ethernet.begin(mac);
+    case 3: {                                           // rebind fail
+        Ethernet.begin(mac);                            // Start Ethernet
         break;
     }
-    case 4: {						// rebind success
+    case 4: {                                           // rebind success
         break;
     }
     }
@@ -283,24 +397,39 @@ bool Check_CPU_Packet_Received(void) {
     }
     return false;
 #else
-    while (client.available()) {
+#ifdef PRINT_CPU_INCOMING
+    if (client.available()) {
+        console.print(millis(), DEC);
+        console.print("\tIncoming Data from CPU:");
+    }
+#endif
+    while (client && client.available() > 0) {
         uint8_t thisbyte = client.read();                               // read the character
         if (thisbyte == (uint8_t)SOH) {                                 // look for start character
+#ifdef PRINT_CPU_INCOMING
+            console.print(thisbyte, DEC); console.print(",");
+#endif
             CPU_string_ptr = 0;                                         // start character received so zero the string pointer
-            Incoming_Packet_from_CPU[CPU_string_ptr++] = (uint8_t)SOH;       // start of packet, store and increment the string pointer
+            Incoming_Packet_from_CPU[CPU_string_ptr++] = (uint8_t)SOH;  // start of packet, store and increment the string pointer
         }
         else {
             if (thisbyte == (uint8_t)EOT) {                             // characters was not an SOH check for ETX
+#ifdef PRINT_CPU_INCOMING
+                console.println(thisbyte, DEC);
+#endif
                 Incoming_Packet_from_CPU[CPU_string_ptr++] = (uint8_t)EOT;   // save the EOT and increment the string pointer
                 CPU_packet_length = CPU_string_ptr - 1;                 // record the received packet length
                 CPU_string_ptr = 0;                                     // zero the string pointer
                 bitWrite(Device_status, 1, 1);                          // set the Hub status CPU Active bit
                 CPU_Packet_Received_Count++;                            // increment CPU packets received count
-                Print_Byte_to_CPU_Port(ACK);                            // send a packet receipt to CPU
+                Print_Byte_to_server(ACK);                              // send a packet receipt to CPU
                 return true;
             }
             else {
                 Incoming_Packet_from_CPU[CPU_string_ptr++] = thisbyte;       // Not a control so save it and increment string pointer
+#ifdef PRINT_CPU_INCOMING
+                console.print(thisbyte, DEC); console.print(",");
+#endif
             }
         }
     }
@@ -419,7 +548,7 @@ bool Decode_Fields(char* str, char Packet_Fields[][20]) {
     // 1. Create a temporary array
     char* temp_command_string = (char*)malloc(packet_size * sizeof(char)); // create a temporary array
     if (temp_command_string == NULL) {                              // Check if the memory allocation was successful
-        console_print("Memory allocation failed!");
+        console_print(false, "Memory allocation failed!");
         while (1);                                                  // Stop the program if memory allocation fails
     }
     // 2. Copy the coded message, from the STX to end into the temporary array
@@ -454,20 +583,20 @@ long Obtain_Long_Parameter(int parameter_number) {
     return atol(Packet_Field[parameter_number]);
 }
 bool Process_CPU_Packet() {                                    // Process a packet from the CPU  
-    console_print("Packet Received from CPU");
+    console_print(false, "Packet Received from CPU");
     switch (Incoming_Packet_from_CPU[1]) {
     case HUB: {
         if (!Decode_Fields(Incoming_Packet_from_CPU, Packet_Field)) {
-            console_print("Corrupt Packet from CPU, target was HUB");
+            console_print(false, "Corrupt Packet from CPU, target was HUB");
             return false;
         }
         else {
-            console_print("Packet Received from CPU, target was HUB");
+            console_print(false, "Packet Received from CPU, target was HUB");
         }
         switch (Obtain_Int_Parameter(0)) {                              // switch on the Command Number
         case (Reset): {
 #ifdef SIMULATION
-            console_print("Restart Requested by CPU");
+            console_print(false, "Restart Requested by CPU");
 #endif
             wdt_enable(WDTO_15MS);  // Enable the watchdog timer with a timeout of 15 ms
             while (true) {}         // Infinite loop to allow the watchdog to reset the microcontroller
@@ -476,13 +605,13 @@ bool Process_CPU_Packet() {                                    // Process a pack
         case (Environment): {
             if (Incoming_Packet_from_CPU[4] == (uint8_t)GET) {
 #ifdef SIMULATION
-                console_print("Environment Get Received from CPU");
+                console_print(false, "Environment Get Received from CPU");
 #endif
                 Send_Reply_to_CPU((int)Environment);
             }
             else if (Incoming_Packet_from_CPU[4] == (uint8_t)SET) {
 #ifdef SIMULATION
-                console_print("Environment Set Lights Received from CPU");
+                console_print(false, "Environment Set Lights Received from CPU");
 #endif
                 if (Obtain_Bool_Parameter(1)) {
                     bitWrite(Device_status, 2, 1);
@@ -495,21 +624,59 @@ bool Process_CPU_Packet() {                                    // Process a pack
         }
         case (FirmwareVersion): {
 #ifdef SIMULATION
-            console_print("Firmware Version Get Received from HUB");
+            console_print(false, "Firmware Version Get Received from HUB");
 #endif
             Send_Reply_to_CPU((int)Firmware_Version);
             break;
         }
         case (Statistics): {
 #ifdef SIMULATION
-            console_print("Statistics Get Received from HUB");
+            console_print(false, "Statistics Get Received from HUB");
 #endif
             Send_Reply_to_CPU((int)Statistics);
             break;
         }
+        case (Retrieve): {
+            int character_count = 0;
+            char field[25];
+            int datafieldNo = 0;
+            char datatemp;
+            LogFile = SD.open("/Log.csv", FILE_READ);                 // open the SD file
+            console_print(true, "\tProcessing Log.csv");
+            if (!LogFile) {                                                                    // oops - file not available!
+                Serial.print("Error re-opening LogFile:");
+                Wait_for_Restart_Switch();                                                             // Reset will restart the processor so no return
+            }
+            else {
+                while (LogFile.available()) {                           // whilst there is data in the log file
+                    datatemp = LogFile.read();                          // read character into datatemp
+                    field[character_count++] = datatemp;                            // add it to the csvfield string
+                    if (datatemp == '\n' || datatemp == ',') {          // end of field or line detected
+                        field[character_count - 1] = '\0';              // insert termination character where the ',' or '\n' was
+                        switch (datafieldNo) {                          // store the field into appropriate variable
+                        case 0: {
+                            Retrieved_Timestamp = field;
+                            break;
+                        }
+                        case 1: {
+                            Retrieved_Message = field;
+                        }
+                        }
+                        datafieldNo++;
+                        field[0] = '\0';
+                        character_count = 0;
+                    }
+                    if (datatemp == '\n') {                             // at this point the obtained record has been retrieved from SD
+                        Send_Reply_to_CPU(Retrieve);
+                        delay(1000);                                    // delay 1 second before sending next record
+                    }
+                }
+            }
+            break;
+        }
         default: {
 #ifdef SIMULATION
-            console_print("Unknown Command Received from HUB");
+            console_print(false, "Unknown Command Received from HUB");
 #endif
             Send_Reply_to_CPU((int)Obtain_Int_Parameter(0));
             break;
@@ -517,28 +684,28 @@ bool Process_CPU_Packet() {                                    // Process a pack
         }                                                  // end of switch on command number
     }
     case ALT: {                                                     // send the packet to the ALT
-        console_print("Packet Destination Altitude");
+        console_print(false, "Packet Destination Altitude");
         Transmit_Packet_to_Target((char)ALT, Incoming_Packet_from_CPU, CPU_packet_length);
         break;
     }
     case AZI: {
-        console_print("Packet Destination Azimuth");
+        console_print(false, "Packet Destination Azimuth");
         Transmit_Packet_to_Target((char)AZI, Incoming_Packet_from_CPU, CPU_packet_length);
         break;
     }
     case BTH: {
-        console_print("Packet Destination Both Motors");
+        console_print(false, "Packet Destination Both Motors");
         Transmit_Packet_to_Target((char)ALT, Incoming_Packet_from_CPU, CPU_packet_length);
         Transmit_Packet_to_Target((char)AZI, Incoming_Packet_from_CPU, CPU_packet_length);
         break;
     }
     case FOC: {
-        console_print("Packet Destination Focuser");
+        console_print(false, "Packet Destination Focuser");
         Transmit_Packet_to_Target((char)FOC, Incoming_Packet_from_CPU, CPU_packet_length);
         break;
     }
     case ALL: {
-        console_print("Packet Destination All Devices");
+        console_print(false, "Packet Destination All Devices");
         Transmit_Packet_to_Target((char)ALT, Incoming_Packet_from_CPU, CPU_packet_length);
         Transmit_Packet_to_Target((char)AZI, Incoming_Packet_from_CPU, CPU_packet_length);
         Transmit_Packet_to_Target((char)FOC, Incoming_Packet_from_CPU, CPU_packet_length);
@@ -550,21 +717,21 @@ void Copy_Packet_to_CPU(uint8_t target) {    // Send message received from ALT,A
     switch (target) {
     case ALT: {
 #ifdef PRINT_CONSOLE_MESSAGES
-        console_print("Packet Received from Altitude");
+        console_print(false, "Packet Received from Altitude");
 #endif
         Transmit_Packet_to_Target(CPU, Incoming_Packet_from_Altitude, Altitude_packet_length);
         break;
     }
     case AZI: {
 #ifdef PRINT_CONSOLE_MESSAGES
-        console_print("Packet Received from Azimuth");
+        console_print(false, "Packet Received from Azimuth");
 #endif
         Transmit_Packet_to_Target(CPU, Incoming_Packet_from_Azimuth, Azimuth_packet_length);
         break;
     }
     case FOC: {
 #ifdef PRINT_CONSOLE_MESSAGES
-        console_print("Packet Received from Focuser");
+        console_print(false, "Packet Received from Focuser");
 #endif
         Transmit_Packet_to_Target(CPU, Incoming_Packet_from_Focuser, Focuser_packet_length);
         break;
@@ -573,65 +740,75 @@ void Copy_Packet_to_CPU(uint8_t target) {    // Send message received from ALT,A
 }
 void Send_Reply_to_CPU(int command) {
     char temp[20];
-    Print_Byte_to_CPU_Port(SOH);                        // Byte 0   SOH
-    Print_Byte_to_CPU_Port(CPU);                        // Byte 1   Target
-    Print_Byte_to_CPU_Port(HUB);                        // Byte 2   Source
-    Print_Byte_to_CPU_Port(REP);                        // Byte 3   Packet Type
-    Print_Byte_to_CPU_Port(command);                    // Byte 4   Command
-    Print_Byte_to_CPU_Port(STX);                        // Byte 5   STX
+    Print_Byte_to_server(SOH);                          // Byte 0   SOH
+    Print_Byte_to_server(CPU);                          // Byte 1   Target
+    Print_Byte_to_server(HUB);                          // Byte 2   Source
+    Print_Byte_to_server(REP);                          // Byte 3   Packet Type
+    Print_Byte_to_server(command);                      // Byte 4   Command
+    Print_Byte_to_server(STX);                          // Byte 5   STX
     sprintf(temp, "%d", Device_status);
-    Print_String_to_CPU_Port(temp, strlen(temp));   // Byte 6 & 7
-    Print_Byte_to_CPU_Port(FLD);                        // Byte 8
+    Print_String_to_server(temp, strlen(temp));         // Byte 6 & 7
+    Print_Byte_to_server(FLD);                          // Byte 8
     if (command == Environment) {
         sprintf(temp, "%.2f", Ambient_Temperature);
-        Print_String_to_CPU_Port(temp, strlen(temp));
-        Print_Byte_to_CPU_Port(FLD);
+        Print_String_to_server(temp, strlen(temp));
+        Print_Byte_to_server(FLD);
         sprintf(temp, "%.2f", Ambient_Humidity);
-        Print_String_to_CPU_Port(temp, strlen(temp));
-        Print_Byte_to_CPU_Port(FLD);
+        Print_String_to_server(temp, strlen(temp));
+        Print_Byte_to_server(FLD);
         sprintf(temp, "%.2f", Motor_Voltage);
-        Print_String_to_CPU_Port(temp, strlen(temp));
-        Print_Byte_to_CPU_Port(FLD);
+        Print_String_to_server(temp, strlen(temp));
+        Print_Byte_to_server(FLD);
     }
     else if (command == FirmwareVersion) {
         sprintf(temp, "%.2f", Firmware_Version);
-        Print_String_to_CPU_Port(temp, strlen(temp));
-        Print_Byte_to_CPU_Port(FLD);
+        Print_String_to_server(temp, strlen(temp));
+        Print_Byte_to_server(FLD);
     }
     else if (command == Statistics) {
         sprintf(temp, "%lu", CPU_Packet_Received_Count);
-        Print_String_to_CPU_Port(temp, strlen(temp));
-        Print_Byte_to_CPU_Port(FLD);
+        Print_String_to_server(temp, strlen(temp));
+        Print_Byte_to_server(FLD);
         sprintf(temp, "%lu", CPU_Packet_Transmitted_Count);
-        Print_String_to_CPU_Port(temp, strlen(temp));
-        Print_Byte_to_CPU_Port(FLD);
+        Print_String_to_server(temp, strlen(temp));
+        Print_Byte_to_server(FLD);
         sprintf(temp, "%lu", ALT_Packet_Received_Count);
-        Print_String_to_CPU_Port(temp, strlen(temp));
-        Print_Byte_to_CPU_Port(FLD);
+        Print_String_to_server(temp, strlen(temp));
+        Print_Byte_to_server(FLD);
         sprintf(temp, "%lu", ALT_Packet_Transmitted_Count);
-        Print_String_to_CPU_Port(temp, strlen(temp));
-        Print_Byte_to_CPU_Port(FLD);
+        Print_String_to_server(temp, strlen(temp));
+        Print_Byte_to_server(FLD);
         sprintf(temp, "%lu", AZI_Packet_Received_Count);
-        Print_String_to_CPU_Port(temp, strlen(temp));
-        Print_Byte_to_CPU_Port(FLD);
+        Print_String_to_server(temp, strlen(temp));
+        Print_Byte_to_server(FLD);
         sprintf(temp, "%lu", AZI_Packet_Transmitted_Count);
-        Print_String_to_CPU_Port(temp, strlen(temp));
-        Print_Byte_to_CPU_Port(FLD);
+        Print_String_to_server(temp, strlen(temp));
+        Print_Byte_to_server(FLD);
         sprintf(temp, "%lu", FOC_Packet_Received_Count);
-        Print_String_to_CPU_Port(temp, strlen(temp));
-        Print_Byte_to_CPU_Port(FLD);
+        Print_String_to_server(temp, strlen(temp));
+        Print_Byte_to_server(FLD);
         sprintf(temp, "%lu", FOC_Packet_Transmitted_Count);
-        Print_String_to_CPU_Port(temp, strlen(temp));
-        Print_Byte_to_CPU_Port(FLD);
+        Print_String_to_server(temp, strlen(temp));
+        Print_Byte_to_server(FLD);
     }
-    Print_Byte_to_CPU_Port(ETX);
-    Print_Byte_to_CPU_Port(EOT);
+    else if (command == Retrieve) {
+        for (int i = 0; i < Retrieved_Timestamp.length(); i++) {
+            client.print(Retrieved_Timestamp[i]);
+        }
+        Print_Byte_to_server(FLD);
+        for (int i = 0; i < Retrieved_Message.length(); i++) {
+            client.print(Retrieved_Message[i]);
+        }
+        Print_Byte_to_server(FLD);
+    }
+    Print_Byte_to_server(ETX);
+    Print_Byte_to_server(EOT);
     CPU_Packet_Transmitted_Count++;
 }
-void Print_Byte_to_CPU_Port(uint8_t data) {                         // used to send single byte ack to CPU
+void Print_Byte_to_server(uint8_t data) {                         // used to send single byte ack to CPU
     client.println(data);
 }
-void Print_String_to_CPU_Port(char* data, char size) {              // used to send character string to CPU
+void Print_String_to_server(char* data, char size) {              // used to send character string to CPU
     for (int i = 0; i < size; i++) {
         client.println(data[i]);
     }
@@ -640,10 +817,10 @@ void Transmit_Packet_to_Target(char target, char* data, char size) {
     switch (target) {
     case CPU: {
         for (int i = 0; i < size; i++) {
-            while (!CPU_Port.availableForWrite()) {
+            while (!server.availableForWrite()) {
                 delay(10);
             }
-            CPU_Port.write(data[i]);
+            server.write(data[i]);
         }
 #ifdef PRINT_CONSOLE_MESSAGES
         console.print("Packet sent to CPU");
@@ -741,10 +918,19 @@ void Transmit_Packet_to_Target(char target, char* data, char size) {
     }
 }
 // -------------------------------------------------------------------------------------------------
-void Console_Print(String message) {
-    console.print(millis(), DEC);
-    console.print("\t");
-    console.println(message);
+void Open_Log_File() {
+    SD.begin(SD_CS);
+    LogFile = SD.open("log.csv", FILE_WRITE);
+    if (!LogFile) {                                            // log file not opened
+        console_print(false, "Error Creating Logfile");
+        while (true) {
+        }
+    }
+    else {
+        console_print(false, "Log File Created and Closed");
+        LogFile.close();
+        LogFile.flush();
+    }
 }
 void Update_Environmental_Sensors() {
     sensors_event_t event;
@@ -775,7 +961,11 @@ void Update_Environmental_Sensors() {
 void Led_Control(uint8_t led, bool state) {
     switch (led) {
     case (RUN_Active_led_pin): {
-        bitWrite(Device_status, 0, 1);
+        bitWrite(Device_status, 0, state);
+        break;
+    }
+    case (Shield_led_pin): {
+        bitWrite(Device_status, 4, state);
         break;
     }
     }
@@ -784,12 +974,44 @@ void Check_Lights() {
     if (bitRead(Device_status, 0)) {                                            // are the lights enabled
         if (bitRead(Device_status, 0)) {                                    // Run_Active led
             if (millis() >= RUN_Active_Led_Start_Time + Led_On_Time) {
+                RUN_Active_Led_Start_Time = millis();
                 digitalWrite(RUN_Active_led_pin, !digitalRead(RUN_Active_led_pin));       // toggle the CAM_Active led
             }
             else {
                 digitalWrite(RUN_Active_led_pin, OFF);                              // turn the CAM_Active led off
             }
         }
+        if (bitRead(Device_status, 4)) {                                    // Run_Active led
+            if (millis() >= Shield_Led_Start_Time + Led_On_Time) {
+                Shield_Led_Start_Time = millis();
+                digitalWrite(Shield_led_pin, !digitalRead(Shield_led_pin));       // toggle the CAM_Active led
+            }
+            else {
+                digitalWrite(Shield_led_pin, OFF);                              // turn the CAM_Active led off
+            }
+        }
+    }
+}
+const uint16_t wdtTimeouts[] = { 16, 32, 64, 125, 250, 500, 1000, 2000, 4000, 8000 };
+uint16_t getWdtTimeoutMs() {
+    // Mask out only the WDP bits from WDTCSR (bits 0-3)
+    uint8_t wdpBits = WDTCSR & 0x0F;  // Mask to get only WDP3:WDP0 bits
+    if (wdpBits < sizeof(wdtTimeouts) / sizeof(wdtTimeouts[0])) {
+        return wdtTimeouts[wdpBits];
+    }
+    else {
+        return 0;  // Undefined timeout
+    }
+}
+void Wait_for_Restart_Switch() {
+    while (1) {
+        Reset_Switch.update();
+        if (Reset_Switch.fell()) {
+            Serial.println("Red Button Pressed");
+            wdt_enable(WDTO_15MS);  // Enable the watchdog timer with a timeout of 15 ms
+            while (true) {}         // Infinite loop to allow the watchdog to reset the microcontroller
+        }
+        delay(500);
     }
 }
 // End of Programme--------------------------------------------------------------------------------
