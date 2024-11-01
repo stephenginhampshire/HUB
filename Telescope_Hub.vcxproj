@@ -89,7 +89,6 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\Common_Files\Telescope_Commands.h" />
-    <ClInclude Include="__vm\.HUB.vsarduino.h" />
     <ClInclude Include="__vm\.Telescope_Hub.vsarduino.h" />
   </ItemGroup>
   <PropertyGroup>
