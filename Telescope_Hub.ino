@@ -32,8 +32,9 @@ Date		Version Description
 29/10/2024  2.3     Log File re-introduced, all functionality tested, appears to be ok
 30/10/2024  2.4     Added functionality to get Time and Date Information
 01/11/2024  2.5     Added free memory to environmental parameters
+07/11/2024  2.6     Day of Week calculation added
 */
-constexpr double Firmware_Version = (double)2.5;
+constexpr double Firmware_Version = (double)2.6;
 // -------------------------------------------------------------------------------------------------
 #include <DHT.h>
 #include <DHT_U.h>
@@ -113,7 +114,42 @@ IPAddress gateway(192, 168, 68, 1);
 IPAddress subnet(255, 255, 0, 0);
 EthernetServer server(80);                                  // Create a server listening on port 80.
 EthernetClient client;                                      // Create an Ethernet Client (CPU)
-IPAddress timeServer(216, 23, 247, 62);                     // NTP server from https://tf.nist.gov/tf-cgi/servers.cgi
+/*
+0.uk.pool.ntp.org:  109.74.206.120, 176.58.109.199,     94.125.129.7,   5.77.45.219
+1.uk.pool.ntp.org:  93.93.131.118,  185.53.93.157,      158.43.128.33,  134.0.16.1
+2.uk.pool.ntp.org:  5.77.45.219,    82.219.4.30,        176.58.109.199, 85.119.80.232
+3.uk.pool.ntp.org:  149.18.38.230,  176.126.242.239,    91.212.90.20,   188.114.116.1
+*/
+// IPAddress timeServer(216, 23, 247, 62);                     // NTP server from https://tf.nist.gov/tf-cgi/servers.cgi
+IPAddress timeServers[] = {
+    {109,74,206,120},                           // [0]
+    {176,58,109,199},                           // [1]
+    {94,125,129,7},                             // [2]
+    {5,77,45,219},                              // [3]
+    {93,93,131,118},                            // [4]
+    {185,53,93,157},                            // [5]
+    {158,43,128,33},                            // [6]
+    {134,0,16,1},                               // [7]
+    {5,77,45,219},                              // [8]
+    {82,219,4,30},                              // [9]
+    {176,58,109,199},                           // [10]
+    {85,119,80,232},                            // [11]
+    {149,18,38,230},                            // [12]
+    {176,126,242,239},                          // [13]
+    {91,212,90,20},                             // [14]
+    {188,114,116,1}                             // [15]
+};
+int Number_of_TimeServers = 16;
+const char* Weekdays[] = {
+    "Bad",
+    "Sunday",
+    "Monday",
+    "Tuesday",
+    "Wednesday",
+    "Thursday",
+    "Friday",
+    "Saturday"
+};
 EthernetUDP ethernet_UDP;                                   // define Ethernet UDP object and local port 8888
 unsigned int localPort = 8888;
 unsigned int ntpSyncTime = 3600;
@@ -174,20 +210,29 @@ unsigned long RUN_Active_Led_Start_Time = 0;
 unsigned long Shield_Led_Start_Time = 0;
 // Date and Time Fields -----------------------------------------------------------------------------------------------0
 struct Date_Time {
-    int Second;                     // [0 - 2]
-    int Minute;                     // [3 - 4]
-    int Hour;                       // [5 - 6]
-    int Day;                        // [7 - 8]
-    int Month;                      // [9 - 10]
-    int Year;                       // [11 - 12]
-    char Date[11];                  // [13 - 23]    "18/11/1951"
-    char Time[9];                   // [24 - 32]    "00:00:00"
+    uint8_t Second;                     // [0]
+    uint8_t Minute;                     // [1]
+    uint8_t Hour;                       // [2]
+    uint8_t Day;                        // [3]
+    uint8_t Month;                      // [4]
+    uint16_t Year;                      // [5 - 6]
 }__attribute__((packed));
 constexpr int Date_Time_Record_Length = 32;
 union Date_Time_Union {
     Date_Time field;
     unsigned char character[Date_Time_Record_Length + 1];
 };
+struct NTP_Date_Format {
+    uint8_t Word_40;                    // [0]
+    uint8_t Word_41;                    // [1]
+    uint8_t Word_42;                    // [2]
+    uint8_t Word_43;                    // [3]
+}__attribute__((packed));
+union NTP_seconds {
+    uint32_t Seconds;
+    uint8_t Words[4];
+};
+NTP_seconds NTP_Seconds;
 Date_Time_Union Current_Date_Time_Data;
 String Current_Date;
 String Current_Time;
@@ -282,16 +327,20 @@ void setup() {
     }
     EthernetClient client = server.accept();
     console_print(true, F("Ethernet Initialisation Complete"));
+    // Date and Time -----------------------------------------------------------------------------------
     console_print(true, F("Date and Time Server Initialisation"));
     int trys = 0;
     do {
-        if (!Get_Time_and_Date()) {
+        if (!Get_Time_and_Date(trys)) {
             snprintf(Display_Buffer, sizeof(Display_Buffer), "\tGet Time and Date, Attempt Number: %d", trys);
             console_print(true, Display_Buffer);
             trys++;
         }
-    } while (trys < 10);
-    if (trys >= 10) {
+        else {
+            break;
+        }
+    } while (trys < Number_of_TimeServers);
+    if (trys >= Number_of_TimeServers) {
         bitWrite(Device_Status, 5, 0);                          // set the status bit Date and Time false
         Current_Date = __DATE__;      // Assign the compilation date
         Current_Time = __TIME__;      // Assign the compilation time
@@ -483,7 +532,7 @@ bool Check_CPU_Packet_Received(void) {
 #endif
             CPU_string_ptr = 0;                                         // start character received so zero the string pointer
             Incoming_Packet_from_CPU[CPU_string_ptr++] = (uint8_t)SOH;  // start of packet, store and increment the string pointer
-        }
+    }
         else {
             if (thisbyte == (uint8_t)EOT) {                             // characters was not an SOH check for ETX
 #ifdef PRINT_CPU_INCOMING
@@ -496,7 +545,7 @@ bool Check_CPU_Packet_Received(void) {
                 CPU_Packet_Received_Count++;                            // increment CPU packets received count
                 Print_Byte_to_server(ACK);                              // send a packet receipt to CPU
                 return true;
-            }
+        }
             else {
                 Incoming_Packet_from_CPU[CPU_string_ptr++] = thisbyte;       // Not a control so save it and increment string pointer
 #ifdef PRINT_CPU_INCOMING
@@ -680,7 +729,7 @@ bool Process_CPU_Packet() {                                         // Process a
                 console_print(true, F("Environment Get Received from CPU"));
 #endif
                 Send_Reply_to_CPU((int)Environment);
-            }
+        }
             else if (Incoming_Packet_from_CPU[4] == (uint8_t)SET) {
 #ifdef SIMULATION
                 console_print(true, F("Environment Set Lights Received from CPU"));
@@ -691,16 +740,16 @@ bool Process_CPU_Packet() {                                         // Process a
                 else {
                     bitWrite(Device_Status, 2, 0);
                 }
-            }
+    }
             break;
-        }
+    }
         case (FirmwareVersion): {
 #ifdef SIMULATION
             console_print(true, F("Firmware Version Get Received from CPU"));
 #endif
             Send_Reply_to_CPU((int)Firmware_Version);
             break;
-        }
+}
         case (Statistics): {
 #ifdef SIMULATION
             console_print(true, F("Statistics Get Received from CPU"));
@@ -723,7 +772,7 @@ bool Process_CPU_Packet() {                                         // Process a
                 Wait_for_Reset_Switch();                                                             // Reset will restart the processor so no return
             }
             else {
-                while (LogFile.available()) {                           // whilst there is data in the log file
+                while (LogFile.available()) {                           // whilst there  data are the log file
                     datatemp = LogFile.read();                          // read character into datatemp
                     field[character_count++] = datatemp;                            // add it to the csvfield string
                     if (datatemp == '\n' || datatemp == ',') {          // end of field or line detected
@@ -1078,7 +1127,7 @@ void Check_Log_File() {
     Serial.print("Free memory after closing file: ");
     Serial.println(freeMemory());
 #endif
-}
+    }
 void Update_Environmental_Sensors() {
     sensors_event_t event;
     Ambient_Sensor.temperature().getEvent(&event);
@@ -1162,26 +1211,30 @@ void Wait_for_Reset_Switch() {
         delay(500);
     }
 }
-int Get_Time_and_Date() {
-    int flag = 0;
+bool Get_Time_and_Date(int timeIPNumber) {
     if (!UDP.begin(localPort)) {
-        console_print(true, "Time Server not reached");
-        return 0;
+        console_print(true, F("Opening UDP Port Failed"));
+        return false;
     }
-    sendNTPpacket(timeServer);
+    console_print(true, F("UDP Port Opened"));
+    console_print(false, F("Sending NTP Packet to: "));
+    Serial.println(timeServers[timeIPNumber]);
+    sendNTPpacket(timeServers[timeIPNumber]);
     delay(1000);
     if (UDP.parsePacket()) {
+        console_print(true, F("Parsing UDP Packet"));
+        uint32_t epoch = 0;
         UDP.readBytes(NTP_Packet_Buffer, NTP_PACKET_SIZE);  // read the packet into the buffer
-        unsigned long highWord, lowWord, epoch;
-        highWord = word(NTP_Packet_Buffer[40], NTP_Packet_Buffer[41]);
-        lowWord = word(NTP_Packet_Buffer[42], NTP_Packet_Buffer[43]);
-        epoch = highWord << 16 | lowWord;
-        epoch = epoch - 2208988800 + timeZoneOffset;
-        flag = 1;
+        NTP_Seconds.Words[3] = NTP_Packet_Buffer[40];
+        NTP_Seconds.Words[2] = NTP_Packet_Buffer[41];
+        NTP_Seconds.Words[1] = NTP_Packet_Buffer[42];
+        NTP_Seconds.Words[0] = NTP_Packet_Buffer[43];
+        epoch = NTP_Seconds.Seconds - 2208988800; // +timeZoneOffset;
         setTime(epoch);
-        ntpLastUpdate = now();
+        ntpLastUpdate = minute();
+        return true;
     }
-    return flag;
+    return false;
 }
 void sendNTPpacket(IPAddress& address) {
     memset(NTP_Packet_Buffer, 0, NTP_PACKET_SIZE);
@@ -1244,45 +1297,86 @@ void Format_Date_and_Time(bool format) {
 }
 void Update_Time_and_Date() {
     if (!bitRead(Device_Status, 5)) {                            // try getting the date and time again
-        if (now() - ntpLastUpdate > ntpSyncTime) {
-            int trys = 0;
-            while (!Get_Time_and_Date() && trys < 10) {
-                trys++;
-            }
-            if (trys < 10) {
-                console_print(true, F("ntp server update success"));
-                console_print(true, F("\tSD Drive Begin successful"));
-                bitWrite(Device_Status, 5, 1);
-            }
-            else {
-                console_print(true, F("ntp server update failed"));
-                bitWrite(Device_Status, 5, 0);
-            }
+        int trys = 0;
+        while (!Get_Time_and_Date(trys) && trys < 10) {
+            trys++;
+        }
+        if (trys >= Number_of_TimeServers) {
+            console_print(true, F("ntp server update failed"));
+            bitWrite(Device_Status, 5, 0);
+        }
+        else {
+            console_print(true, F("ntp server update success"));
+            prevDisplay = minute();
+            Clock_Display();
+            bitWrite(Device_Status, 5, 1);
         }
     }
-    if (bitRead(Device_Status, 5)) {
-        if (now() != prevDisplay) {                 // Display the time if it has changed by more than a second.
-            prevDisplay = now();
+    else {
+        if (minute() != prevDisplay) {                 // Display the time if it has changed by more than a second.
+            prevDisplay = minute();
             Clock_Display();
         }
     }
 }
 void Clock_Display() {                                   // Clock display of the time and date (Basic)
+    int weekday = calcDayOfWeek(year(), month(), day());
     Serial.print(millis(), DEC); Serial.print("\t");
-    Serial.print(hour());
+    Serial.print(Weekdays[weekday]);
+    Serial.print(", ");
+    printDigits(hour());
+    Serial.print(":");
     printDigits(minute());
+    Serial.print(":");
     printDigits(second());
     Serial.print(" ");
-    Serial.print(day());
-    Serial.print(" ");
-    Serial.print(month());
-    Serial.print(" ");
+    printDigits(day());
+    Serial.print("/");
+    printDigits(month());
+    Serial.print("/");
     Serial.print(year());
     Serial.println();
 }
 void printDigits(int digits) {
-    Serial.print(":");
     if (digits < 10)
         Serial.print('0');
     Serial.print(digits);
+}
+byte calcDayOfWeek(int y, byte m, byte d) {
+    // Old mental arithmetic method for calculating day of week
+    // adapted for Arduino, for years 2000~2099
+    // returns 1 for Sunday, 2 for Monday, etc., up to 7 for Saturday
+    // for "bad" dates (like Feb. 30), it returns 0
+    // Note: input year (y) should be a number from 0~99
+    if (y > 2099) return 0; // we don't accept years after 2099
+    // we take care of bad months later
+    if (d < 1) return 0; // because there is no day 0
+    byte w = 6; // this is a magic number (y2k fix for this method)
+    // one ordinary year is 52 weeks + 1 day left over
+    // a leap year has one more day than that
+    // we add in these "leftover" days
+    w += (y + (y >> 2));
+    // correction for Jan. and Feb. of leap year
+    if (((y & 3) == 0) && (m <= 2)) w--;
+    // add in "magic number" for month
+    switch (m) {
+    case 1:  if (d > 31) return 0; w += 1; break;
+    case 2:  if (d > ((y & 3) ? 28 : 29)) return 0; w += 4; break;
+    case 3:  if (d > 31) return 0; w += 4; break;
+    case 4:  if (d > 30) return 0; break;
+    case 5:  if (d > 31) return 0; w += 2; break;
+    case 6:  if (d > 30) return 0; w += 5; break;
+    case 7:  if (d > 31) return 0; break;
+    case 8:  if (d > 31) return 0; w += 3; break;
+    case 9:  if (d > 30) return 0; w += 6; break;
+    case 10: if (d > 31) return 0; w += 1; break;
+    case 11: if (d > 30) return 0; w += 4; break;
+    case 12: if (d > 31) return 0; w += 6; break;
+    default: return 0;
+    }
+    // then add day of month
+    w += d;
+    // there are only 7 days in a week, so we "cast out" sevens
+    while (w > 7) w = (w >> 3) + (w & 7);
+    return w;
 }
