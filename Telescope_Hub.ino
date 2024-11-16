@@ -34,8 +34,9 @@ Date		Version Description
 01/11/2024  2.5     Added free memory to environmental parameters
 07/11/2024  2.6     Day of Week calculation added
 09/11/2024  2.7     Simulations Debugged and all working
+16/11/2024  2.8     Simulation code removed
 */
-constexpr double Firmware_Version = (double)2.7;
+constexpr double Firmware_Version = (double)2.8;
 // -------------------------------------------------------------------------------------------------
 #include <DHT.h>
 #include <DHT_U.h>
@@ -52,11 +53,8 @@ constexpr double Firmware_Version = (double)2.7;
 // Inclusions -------------------------------------------------------------------------------------
 //#define SD_DEBUG
 //#define DISPLAY_FREE_MEMORY
-//#define PRINT_CPU_INCOMING
-//#define PRINT_FIELDS
-//#define SIMULATE_INCOMING_PACKETS           // Simulate the receipt of packets from the CPU
+#define PRINT_IO
 #include <C:\Users\Stephen\Dropbox\Projects\Combined_Telescope\Common_Files\Telescope_Commands.h>
-//#define PRINT_CONSOLE_MESSAGES
 #define console Serial
 // Constants --------------------------------------------------------------------------------------
 constexpr int Altitude_baud = (int)38400;
@@ -98,6 +96,7 @@ double Ambient_Temperature = 0;             // Temperature value
 double Ambient_Humidity = 0;                // Humidity value
 double Motor_Voltage = 0;                   // Voltage value
 String Retrieved_Timestamp;
+bool Retrieved_Direction = false;
 String Retrieved_Message;
 // Instantiations ---------------------------------------------------------------------------------
 HardwareSerial Altitude_Port = Serial1;                     // Altitude Port
@@ -180,23 +179,32 @@ unsigned long AZI_Packet_Transmitted_Count = 0;
 unsigned long FOC_Packet_Received_Count = 0;
 unsigned long FOC_Packet_Transmitted_Count = 0;
 uint8_t CPU_string_ptr;
+uint16_t CPU_Incoming_Packet_Length = 0;
+bool CPU_Packet_Direction = false;
 uint8_t Altitude_inptr;					// must be 8 bit uint8_t so that it overflows at 256
 uint8_t Altitude_outptr;				// must be 8 bit uint8_t so that it overflows at 256
 uint8_t Altitude_inbuffer[0xff];
 uint8_t Altitude_string_ptr;
+uint16_t Altitude_Incoming_Packet_Length = 0;
+bool Altitude_Packet_Direction = false;
 uint8_t Azimuth_inptr;					// must be 8 bit uint8_t so that it overflows at 256
 uint8_t Azimuth_outptr;					// must be 8 bit uint8_t so that it overflows at 256
 uint8_t Azimuth_inbuffer[0xff];
 uint8_t Azimuth_string_ptr;
+uint16_t Azimuth_Incoming_Packet_Length = 0;
+bool Azimuth_Packet_Direction = false;
 uint8_t Focuser_inptr;
 uint8_t Focuser_outptr;
 uint8_t Focuser_inbuffer[0xff];
 uint8_t Focuser_string_ptr;
+uint16_t Focuser_Incoming_Packet_Length = 0;
+bool Focuser_Packet_Direction = false;
 uint16_t Device_Status = 0;
 enum { OFF = 0, ON = 1 };
 unsigned long RUN_Active_Led_Start_Time = 0;
 unsigned long Shield_Led_Start_Time = 0;
 // Date and Time Fields ---------------------------------------------------------------------------
+char formattedDateTime[20];             // used to convert the compile date and time into yyyy/mm/dd hh:mm:ss format
 struct Date_Time {
     uint8_t Second;                     // [0]
     uint8_t Minute;                     // [1]
@@ -293,9 +301,7 @@ void setup() {
     //    root.ls(LS_R | LS_DATE | LS_SIZE);    // list all files in the card with date and size
     bitWrite(Device_Status, Disk_Status, 1);
     console_print(true, F("SD Initialisation Complete"));
-    console_print(true, F("Deleting any Existing Log File"));
-    Check_Log_File();
-    console_print(true, F("New Log Created"));
+
     console_print(true, F("Starting Ethernet Initialisation"));
     Ethernet.begin(mac, ip, my_dns, gateway, subnet);                         // Start Ethernet
     delay(1000);
@@ -329,10 +335,8 @@ void setup() {
     } while (trys < Number_of_TimeServers);
     if (trys >= Number_of_TimeServers) {
         bitWrite(Device_Status, Date_Status, 0);                          // set the status bit Date and Time false
-        Current_Date = __DATE__;      // Assign the compilation date
-        Current_Time = __TIME__;      // Assign the compilation time
-        // Concatenate the date and time into one string
-        Current_Date_and_Time = Current_Date + " " + Current_Time;
+        printBuildDateTime(formattedDateTime);
+        Current_Date_and_Time = String(formattedDateTime);
         console_print(true, F("Failed to Get Date and Time")); // This line is for error handling, adjust as needed
         snprintf(Display_Buffer, sizeof(Display_Buffer), "\tDate and Time Set to :\%s", Current_Date_and_Time.c_str());
         console_print(true, Display_Buffer);
@@ -419,8 +423,11 @@ void setup() {
         console_print(true, F("\tWatchdog Timer Initialisation failure"));
     }
     console_print(true, F("Watchdog Timer Initialisation Complete"));
-#ifdef SIMULATE_INCOMING_PACKETS
-    console_print(true, F("Simulating CPU Incoming Packets"));
+    console_print(true, F("Deleting any Existing Log File"));
+    Check_Log_File();
+    console_print(true, F("New Log Created"));
+#ifdef PRINT_IO
+    console_print(true, F("Printing Serial Data"));
 #endif
     Led_Control(RUN_Active_led_pin, ON);
     console_print(true, F("Logging to SD Drive now Active"));
@@ -437,26 +444,107 @@ void loop() {
             console_print(true, F("Bad Packet Received from CPU"));
         }
     }
-    if (Check_Altitude_Packet_Received()) Transmit_Packet_to_Target(CPU, Incoming_Packet_from_Altitude);
-    if (Check_Azimuth_Packet_Received()) Transmit_Packet_to_Target(CPU, Incoming_Packet_from_Azimuth);
-    if (Check_Focuser_Packet_Received()) Transmit_Packet_to_Target(CPU, Incoming_Packet_from_Focuser);
+    if (Check_Altitude_Packet_Received()) Transmit_Packet_to_Target(CPU, Incoming_Packet_from_Altitude, Altitude_Incoming_Packet_Length);
+    if (Check_Azimuth_Packet_Received()) Transmit_Packet_to_Target(CPU, Incoming_Packet_from_Azimuth, Azimuth_Incoming_Packet_Length);
+    if (Check_Focuser_Packet_Received()) Transmit_Packet_to_Target(CPU, Incoming_Packet_from_Focuser, Focuser_Incoming_Packet_Length);
     Check_Lights();
     Update_Environmental_Sensors();
     Update_Time_and_Date();
 }// end of main loop ------------------------------------------------------------------------------
-void Save_Packet_to_Log_File(char* data) {
+void Save_Packet_to_Log_File(uint8_t target, char* data, int length, bool direction) {
+    console_print(false, F("Saving Packet Received to Disk: "));
     LogFile = SD.open("log.csv", FILE_WRITE);
     if (LogFile) {
-        if (bitRead(Device_Status, Date_Status)) {
+        if (bitRead(Device_Status, Date_Status)) {                      // if the Date and Time are valid
             Format_Date_and_Time(true);
+#ifdef PRINT_IO
+            Serial.print("("); Serial.print(Current_Date_and_Time); Serial.print("),(");
+#endif
             LogFile.print(Current_Date_and_Time);                        // save real timestamp
         }
         else {
-            LogFile.print(__DATE__); LogFile.print(__TIME__);           // or compiler timestamp
+            printBuildDateTime(formattedDateTime);
+#ifdef PRINT_IO
+            Serial.print("("); Serial.print(formattedDateTime); Serial.print("),(");
+#endif
+            LogFile.print(formattedDateTime);           // or compiler timestamp
         }
-        LogFile.print(",");                                             // field delimiter
-        LogFile.print(data);
-        LogFile.println();                                              // terminate the line
+        LogFile.print(",");                             // field delimiter
+        if (direction) {
+            LogFile.print("to ");
+#ifdef PRINT_IO
+            Serial.print("to ");
+#endif
+        }
+        else {
+            LogFile.print("from ");
+#ifdef PRINT_IO
+            Serial.print("from ");
+#endif
+        }
+        switch (target) {
+        case CPU: {
+            LogFile.print("CPU,");
+#ifdef PRINT_IO
+            Serial.print("CPU),(");
+#endif
+            break;
+        }
+        case ALT: {
+            LogFile.print("Altitude,");
+#ifdef PRINT_IO
+            Serial.print("Altitude),(");
+#endif
+            break;
+        }
+        case AZI: {
+            LogFile.print("Azimuth,");
+#ifdef PRINT_IO
+            Serial.print("Azimuth),(");
+#endif
+            break;
+        }
+        case FOC: {
+            LogFile.print("Focuser,");
+#ifdef PRINT_IO
+            Serial.print("Focuser),(");
+#endif
+            break;
+        }
+        case HUB: {
+            LogFile.print("Hub,");
+#ifdef PRINT_IO
+            Serial.print("Hub),(");
+#endif
+            break;
+        }
+        case BTH: {
+            LogFile.print("Both,");
+#ifdef PRINT_IO
+            Serial.print("Both),(");
+#endif
+            break;
+        }
+        case ALL: {
+            LogFile.print("All,");
+#ifdef PRINT_IO
+            Serial.print("All),(");
+#endif
+            break;
+        }
+        }
+        //       Serial.print("["); Serial.print(length, DEC); Serial.print("]:(");
+        for (int i = 0; i <= length; i++) {
+#ifdef PRINT_IO
+            Serial.print(data[i], DEC);
+            if (i < length) Serial.print("),(");
+#endif
+            LogFile.write(data[i]);
+        }
+#ifdef PRINT_IO
+        Serial.println(")");
+#endif
+        LogFile.println();
         LogFile.close();
         LogFile.flush();
     }
@@ -487,31 +575,17 @@ void Maintain_Internet() {
     }
 }
 bool Check_CPU_Packet_Received(void) {
-#ifdef SIMULATE_INCOMING_PACKETS
-    if (millis() > CPU_Time_to_Send_Next_Packet) {
-        CPU_Time_to_Send_Next_Packet = millis() + Time_Between_CPU_Packets;                     // update timing
-        for (int i = 0; i < Standard_CPU_Packet_Length; i++) {
-            Incoming_Packet_from_CPU[i] = Standard_CPU_Packets[CPU_Simulation_Packet_Pointer][i]; // copy sample packet to received packet
-        }
-        CPU_Simulation_Packet_Pointer++;                                                        // increment the packet pointer
-        if (CPU_Simulation_Packet_Pointer > Number_of_Standard_CPU_Packets) CPU_Simulation_Packet_Pointer = 0;
-        CPU_Packet_Received_Count++;
-        Save_Packet_to_Log_File(Incoming_Packet_from_CPU);
-        return true;
-    }
-    return false;
-#else
     if (server.available()) {
         client = server.accept();
-        console_print(true, "Client connected:");
+        //        console_print(true, "Client connected:");
     }
     while (client && client.connected() && client.available() > 0) {
-#ifdef PRINT_CPU_INCOMING
+#ifdef PRINT_IO
         console_print(true, "\tIncoming Data from CPU:");
 #endif
         uint8_t thisbyte = client.read();                               // read the character
         if (thisbyte == (uint8_t)SOH) {                                 // look for start character
-#ifdef PRINT_CPU_INCOMING
+#ifdef PRINT_IO
             console.print(thisbyte, DEC); console.println(",");
 #endif
             CPU_string_ptr = 0;                                         // start character received so zero the string pointer
@@ -519,149 +593,167 @@ bool Check_CPU_Packet_Received(void) {
         }
         else {
             if (thisbyte == (uint8_t)EOT) {                             // characters was not an SOH check for ETX
-#ifdef PRINT_CPU_INCOMING
+#ifdef PRINT_IO
                 console.println(thisbyte, DEC);
 #endif
                 Incoming_Packet_from_CPU[CPU_string_ptr++] = (uint8_t)EOT;   // save the EOT and increment the string pointer
+                CPU_Incoming_Packet_Length = CPU_string_ptr - 1;
+#ifdef PRINT_IO
+                console_print(false, F("Length of Received Packet: ["));
+                Serial.print(CPU_Incoming_Packet_Length, DEC);
+                Serial.println("]");
+#endif
+                Save_Packet_to_Log_File(Incoming_Packet_from_CPU[1], Incoming_Packet_from_CPU, CPU_Incoming_Packet_Length, INCOMING);
                 CPU_string_ptr = 0;                                     // zero the string pointer
                 CPU_Packet_Received_Count++;                            // increment CPU packets received count
-                Save_Packet_to_Log_File(Incoming_Packet_from_CPU);
                 return true;
             }
             else {
                 Incoming_Packet_from_CPU[CPU_string_ptr++] = thisbyte;       // Not a control so save it and increment string pointer
-#ifdef PRINT_CPU_INCOMING
+#ifdef PRINT_IO
                 console.print(thisbyte, DEC); console.println(",");
 #endif
             }
         }
     }
     return false;
-#endif 
 }
 bool Check_Altitude_Packet_Received(void) {
-#ifdef SIMULATE_INCOMING_PACKETS
-    if (millis() > ALT_Time_to_Send_Next_Packet) {
-        ALT_Time_to_Send_Next_Packet = millis() + Time_Between_ALT_Packets;
-        for (int i = 0; i < Standard_Packet_Length; i++) {
-            Incoming_Packet_from_Altitude[i] = Standard_ALT_Packets[ALT_Simulation_Packet_Pointer][i];
-        }
-        ALT_Simulation_Packet_Pointer++;
-        if (ALT_Simulation_Packet_Pointer > Number_of_Standard_ALT_Packets) ALT_Simulation_Packet_Pointer = 0;
-        ALT_Packet_Received_Count++;
-        Save_Packet_to_Log_File(Incoming_Packet_from_Altitude);
-        return true;
-    }
-    return false;
-#else
     while (Altitude_outptr != Altitude_inptr) {                                 // check Altitude serial buffer for data
+#ifdef PRINT_IO
+        console_print(true, "\tIncoming Data from Altitude:");
+#endif
         uint8_t thisbyte = Altitude_inbuffer[Altitude_outptr++];                // take a characters from the input buffer and increment pointer
         if (thisbyte == (uint8_t)SOH) {                                         // look for the SOH
+#ifdef PRINT_IO
+            console.print(thisbyte, DEC); console.println(",");
+#endif
             Incoming_Packet_from_Altitude[Altitude_string_ptr++] = (uint8_t)SOH; // store the SOH and increment the string pointer
         }
         else {
             if (thisbyte == (uint8_t)EOT) {                                         // characters was not an SOH check for ETX
+#ifdef PRINT_IO
+                console.println(thisbyte, DEC);
+#endif
                 Incoming_Packet_from_Altitude[Altitude_string_ptr++] = (uint8_t)EOT; // save the EOT and increment the string pointer
+                Altitude_Incoming_Packet_Length = Altitude_string_ptr - 1;
+#ifdef PRINT_IO
+                console_print(false, F("Length of Received Packet: ["));
+                Serial.print(Altitude_Incoming_Packet_Length, DEC);
+                Serial.println("]");
+#endif
+                Save_Packet_to_Log_File(Incoming_Packet_from_Altitude[1], Incoming_Packet_from_Azimuth, Altitude_Incoming_Packet_Length, INCOMING);
                 Altitude_string_ptr = 0;                                            // zero the string pointer
                 ALT_Packet_Received_Count++;
-                Save_Packet_to_Log_File(Incoming_Packet_from_Azimuth);
                 return true;
             }
             else {
                 Incoming_Packet_from_Altitude[Altitude_string_ptr++] = thisbyte; // Not a control so save it and increment string pointer
+#ifdef PRINT_IO
+                console.print(thisbyte, DEC); console.println(",");
+#endif
             }
         }
     }
     return false;
-#endif
 }
 bool Check_Azimuth_Packet_Received(void) {
-#ifdef SIMULATE_INCOMING_PACKETS
-    if (millis() > AZI_Time_to_Send_Next_Packet) {
-        AZI_Time_to_Send_Next_Packet = millis() + Time_Between_AZI_Packets;
-        for (int i = 0; i < Standard_Packet_Length; i++) {
-            Incoming_Packet_from_Azimuth[i] = Standard_AZI_Packets[AZI_Simulation_Packet_Pointer][i];
-        }
-        AZI_Simulation_Packet_Pointer++;
-        if (AZI_Simulation_Packet_Pointer > Number_of_Standard_AZI_Packets) AZI_Simulation_Packet_Pointer = 0;
-        AZI_Packet_Received_Count++;
-        Save_Packet_to_Log_File(Incoming_Packet_from_Azimuth);
-        return true;
-    }
-#else
     while (Azimuth_outptr != Azimuth_inptr) {                                   // check Azimuth serial buffer for data
+#ifdef PRINT_IO
+        console_print(true, "\tIncoming Data from Azimuth:");
+#endif
         uint8_t thisbyte = Azimuth_inbuffer[Azimuth_outptr++];                  // take a characters from the input buffer and increment pointer
         if (thisbyte == (uint8_t)SOH) {                                         // look for the SOH
             Incoming_Packet_from_Azimuth[Azimuth_string_ptr++] = (uint8_t)SOH;  // store the SOH and increment the string pointer
+#ifdef PRINT_IO
+            console.print(thisbyte, DEC); console.println(",");
+#endif
         }
         else {
             if (thisbyte == (uint8_t)EOT) {                                          // characters was not an STX check for ETX
+#ifdef PRINT_IO
+                console.println(thisbyte, DEC);
+#endif
                 Incoming_Packet_from_Azimuth[Azimuth_string_ptr++] = (uint8_t)EOT;  // save the EOT and increment the string pointer
+                Azimuth_Incoming_Packet_Length = Azimuth_string_ptr - 1;
+#ifdef PRINT_IO
+                console_print(false, F("Length of Received Packet: ["));
+                Serial.print(Azimuth_Incoming_Packet_Length, DEC);
+                Serial.println("]");
+#endif
+                Save_Packet_to_Log_File(Incoming_Packet_from_Azimuth[1], Incoming_Packet_from_Azimuth, Azimuth_Incoming_Packet_Length, INCOMING);
                 Azimuth_string_ptr = 0;                                             // zero the string pointer
                 AZI_Packet_Received_Count++;
-                Save_Packet_to_Log_File(Incoming_Packet_from_Azimuth);
                 return true;
             }
             else {
                 Incoming_Packet_from_Azimuth[Azimuth_string_ptr++] = thisbyte;  // Not a control so save it and increment string pointer
+#ifdef PRINT_IO
+                console.println(thisbyte, DEC);
+#endif
             }
         }
     } // end of while Azimuth
-#endif
     return false;
 }
 bool Check_Focuser_Packet_Received(void) {
-#ifdef SIMULATE_INCOMING_PACKETS
-    if (millis() > FOC_Time_to_Send_Next_Packet) {
-        FOC_Time_to_Send_Next_Packet = millis() + Time_Between_FOC_Packets;
-        for (int i = 0; i < Standard_Packet_Length; i++) {
-            Incoming_Packet_from_Focuser[i] = Standard_FOC_Packets[FOC_Simulation_Packet_Pointer][i];
-        }
-        FOC_Simulation_Packet_Pointer++;
-        if (FOC_Simulation_Packet_Pointer > Number_of_Standard_FOC_Packets) FOC_Simulation_Packet_Pointer = 0;
-        FOC_Packet_Received_Count++;
-        Save_Packet_to_Log_File(Incoming_Packet_from_Focuser);
-        return true;
-    }
-    return false;
-#else
     while (Focuser_outptr != Focuser_inptr) {                                   // check Focuser serial buffer for data
+#ifdef PRINT_IO
+        console_print(true, "\tIncoming Data from Focuser:");
+#endif
         uint8_t thisbyte = Focuser_inbuffer[Focuser_outptr++];                  // take a characters from the input buffer and increment pointer
         if (thisbyte == (char)SOH) {                                            // look for the SOH
             Incoming_Packet_from_Focuser[Focuser_string_ptr++] = (uint8_t)SOH;  // store the SOH and increment the string pointer
+#ifdef PRINT_IO
+            console.print(thisbyte, DEC); console.println(",");
+#endif
         }
         else {
             if (thisbyte == (char)EOT) {                                            // characters was not an STX check for ETX
+#ifdef PRINT_IO
+                console.println(thisbyte, DEC);
+#endif
                 Incoming_Packet_from_Focuser[Focuser_string_ptr++] = (uint8_t)EOT;  // save the EOT and increment the string pointer
+                Focuser_Incoming_Packet_Length = Focuser_string_ptr - 1;
+#ifdef PRINT_IO
+                console_print(false, F("Length of Received Packet: ["));
+                Serial.print(Focuser_Incoming_Packet_Length, DEC);
+                Serial.println("]");
+#endif
+                Save_Packet_to_Log_File(Incoming_Packet_from_Focuser[1], Incoming_Packet_from_Focuser, Focuser_Incoming_Packet_Length, INCOMING);
                 Focuser_string_ptr = 0;                                             // zero the string pointer
                 FOC_Packet_Received_Count++;
-                Save_Packet_to_Log_File(Incoming_Packet_from_Focuser);
                 return true;
             }
             else {
                 Incoming_Packet_from_Focuser[Focuser_string_ptr++] = thisbyte; // Not a control so save it and increment string pointer
+#ifdef PRINT_IO
+                console.println(thisbyte, DEC);
+#endif
             }
         }
     } // end of while Focuser
     return false;
-#endif
 }
 bool Process_CPU_Packet() {                                         // Process a packet from the CPU  
     console_print(true, F("Processing Packet Received from CPU"));
-    //    console_print(false, F("Target:"));
-    //    Serial.println(Incoming_Packet_from_CPU[TARGET], DEC);
     switch (Incoming_Packet_from_CPU[TARGET]) {                          // switch on the target
     case HUB: {
-        console_print(true, F("Packet Destination HUB"));
-        Save_Packet_to_Log_File(Incoming_Packet_from_CPU);
+#ifdef PRINT_IO
+        console_print(false, F("Packet Destination HUB: "));
+#endif
         unsigned long size_of_packet = 0;
         for (unsigned int i = 0; i < sizeof(Incoming_Packet_from_CPU); i++) {
-            //            Serial.print("(");
-            //            Serial.print(Incoming_Packet_from_CPU[i], DEC);
-            //            Serial.print("),");
+#ifdef PRINT_IO
+            Serial.print("(");
+            Serial.print(Incoming_Packet_from_CPU[i], DEC);
+            Serial.print("),");
+#endif
             size_of_packet++;
             if (Incoming_Packet_from_CPU[i] == EOT) {
-                //                Serial.println();
+#ifdef PRINT_IO
+                Serial.println();
+#endif
                 break;
             }
         }
@@ -746,7 +838,11 @@ bool Process_CPU_Packet() {                                         // Process a
                                 break;
                             }
                             case 1: {
+                                Retrieved_Direction = (bool)field;
+                            }
+                            case 2: {
                                 Retrieved_Message = field;
+                                break;
                             }
                             }
                             datafieldNo++;
@@ -798,30 +894,30 @@ bool Process_CPU_Packet() {                                         // Process a
     }
     case ALT: {                                                     // send the packet to the ALT
         console_print(true, F("Packet Destination Altitude"));
-        Transmit_Packet_to_Target((char)ALT, Incoming_Packet_from_CPU);
+        Transmit_Packet_to_Target((char)ALT, Incoming_Packet_from_CPU, CPU_Incoming_Packet_Length);
         break;
     }
     case AZI: {
         console_print(true, F("Packet Destination Azimuth"));
-        Transmit_Packet_to_Target((char)AZI, Incoming_Packet_from_CPU);
+        Transmit_Packet_to_Target((char)AZI, Incoming_Packet_from_CPU, CPU_Incoming_Packet_Length);
         break;
     }
     case BTH: {
         console_print(true, F("Packet Destination Both Motors"));
-        Transmit_Packet_to_Target((char)ALT, Incoming_Packet_from_CPU);
-        Transmit_Packet_to_Target((char)AZI, Incoming_Packet_from_CPU);
+        Transmit_Packet_to_Target((char)ALT, Incoming_Packet_from_CPU, CPU_Incoming_Packet_Length);
+        Transmit_Packet_to_Target((char)AZI, Incoming_Packet_from_CPU, CPU_Incoming_Packet_Length);
         break;
     }
     case FOC: {
         console_print(true, F("Packet Destination Focuser"));
-        Transmit_Packet_to_Target((char)FOC, Incoming_Packet_from_CPU);
+        Transmit_Packet_to_Target((char)FOC, Incoming_Packet_from_CPU, CPU_Incoming_Packet_Length);
         break;
     }
     case ALL: {
         console_print(true, F("Packet Destination All Devices"));
-        Transmit_Packet_to_Target((char)ALT, Incoming_Packet_from_CPU);
-        Transmit_Packet_to_Target((char)AZI, Incoming_Packet_from_CPU);
-        Transmit_Packet_to_Target((char)FOC, Incoming_Packet_from_CPU);
+        Transmit_Packet_to_Target((char)ALT, Incoming_Packet_from_CPU, CPU_Incoming_Packet_Length);
+        Transmit_Packet_to_Target((char)AZI, Incoming_Packet_from_CPU, CPU_Incoming_Packet_Length);
+        Transmit_Packet_to_Target((char)FOC, Incoming_Packet_from_CPU, CPU_Incoming_Packet_Length);
     }
     default: {
         console_print(true, F("Unspecified Target Device"));
@@ -832,227 +928,358 @@ bool Process_CPU_Packet() {                                         // Process a
 }
 void Send_Reply_to_CPU(int command) {
     char temp[20];
-    console_print(false, F("Sending Reply to CPU: "));
+#ifdef PRINT_IO
+    console_print(false, F("Sending Reply to CPU and Saving to Disk: "));
+#endif
+    LogFile = SD.open("log.csv", FILE_WRITE);
+    if (!LogFile) {
+        Wait_for_Reset_Switch(F("Log File Open Failure (Send Reply to Disk)"));
+    }
+    Format_Date_and_Time(true);
+    LogFile.print(Current_Date_and_Time);                        // save real timestamp
+    LogFile.print(",");                             // field delimiter
+    LogFile.print("to CPU,");
     client.print(SOH);                            // Byte 0   SOH
+    LogFile.write(SOH);
+#ifdef PRINT_IO
     Serial.print(F("("));
     Serial.print(SOH, DEC);
-
     Serial.print(F("),("));
+#endif
     client.print(CPU);                            // Byte 1   Target
+    LogFile.write(CPU);
+#ifdef PRINT_IO
     Serial.print(CPU, DEC);
-
     Serial.print(F("),("));
+#endif
     client.print(HUB);                            // Byte 2   Source
+    LogFile.write(HUB);
+#ifdef PRINT_IO
     Serial.print(HUB, DEC);
-
     Serial.print(F("),("));
+#endif
     client.print(REP);                            // Byte 3   Packet Type
+#ifdef PRINT_IO
     Serial.print(REP, DEC);
-
     Serial.print(F("),("));
+#endif
     client.print(command);                        // Byte 4   Command
+    LogFile.write(command);
+#ifdef PRINT_IO
     Serial.print(command, DEC);
-
     Serial.print(F("),("));
+#endif
+    LogFile.write(STX);
     client.print(STX);                            // Byte 5   STX
+#ifdef PRINT_IO
     Serial.print(STX, DEC);
-
     Serial.print(F("),("));
+#endif
     sprintf(temp, "%d", Device_Status);
     client.print(temp);                           // Byte 6 & 7
+    LogFile.write(temp);
+#ifdef PRINT_IO
     Serial.print(temp);
-
     Serial.print(F("),("));
+#endif
     client.print(FLD);                            // Byte 8
+    LogFile.write(FLD);
+#ifdef PRINT_IO
     Serial.print(FLD, DEC);
+#endif
     switch (command) {
     case Environment: {
-        Serial.print(F("),[Data]("));
+#ifdef PRINT_IO
+        Serial.print(F("),("));
+#endif
         dtostrf(Ambient_Temperature, 4, 2, temp);
         client.print(temp);
+        LogFile.write(temp);
+#ifdef PRINT_IO
         Serial.print(temp);
-
         Serial.print(F("),("));
+#endif
         client.print(FLD);
+        LogFile.write(FLD);
+#ifdef PRINT_IO
         Serial.print(FLD, DEC);
-
-        Serial.print(F("),[Data]("));
+        Serial.print(F("),("));
+#endif
         dtostrf(Ambient_Humidity, 4, 2, temp);
         client.print(temp);
+        LogFile.write(temp);
+#ifdef PRINT_IO
         Serial.print(temp);
-
         Serial.print(F("),("));
+#endif
         client.print(FLD);
+        LogFile.write(FLD);
+#ifdef PRINT_IO
         Serial.print(FLD, DEC);
-
-        Serial.print(F("),[Data]("));
+        Serial.print(F("),("));
+#endif
         dtostrf(Motor_Voltage, 4, 2, temp);
         client.print(temp);
+        LogFile.write(temp);
+#ifdef PRINT_IO
         Serial.print(temp);
-
         Serial.print(F("),("));
+#endif
         client.print(FLD);
+        LogFile.write(FLD);
+#ifdef PRINT_IO
         Serial.print(FLD, DEC);
-
-        Serial.print(F("),[Data]("));
+        Serial.print(F("),("));
+#endif
         Free_Memory = freeMemory();
         itoa(Free_Memory, temp, 10);
         client.print(temp);
+        LogFile.write(temp);
+#ifdef PRINT_IO
         Serial.print(temp);
-
         Serial.print(F("),("));
+#endif
         client.print(FLD);
+        LogFile.write(FLD);
+#ifdef PRINT_IO
         Serial.print(FLD, DEC);
+#endif
         break;
     }
     case FirmwareVersion: {
-        Serial.print(F("),[Data]("));
+#ifdef PRINT_IO
+        Serial.print(F("),("));
+#endif
         dtostrf(Firmware_Version, 4, 2, temp);
         client.print(temp);
+        LogFile.write(temp);
+#ifdef PRINT_IO
         Serial.print(temp);
-
-        Serial.print(F("),[FLD]("));
+        Serial.print(F("),("));
+#endif
         client.print(FLD);
+        LogFile.write(FLD);
+#ifdef PRINT_IO
         Serial.print(FLD, DEC);
-
-        Serial.print(F("),[Data]("));
+        Serial.print(F("),("));
+#endif
         dtostrf(Protocol_Version, 4, 2, temp);
         client.print(temp);
+        LogFile.write(temp);
+#ifdef PRINT_IO
         Serial.print(temp);
-
         Serial.print(F("),("));
+#endif
         client.print(FLD);
+        LogFile.write(FLD);
+#ifdef PRINT_IO
         Serial.print(FLD, DEC);
-
+#endif
         break;
     }
     case Statistics: {
-        Serial.print(F("),[Data]("));
+#ifdef PRINT_IO
+        Serial.print(F("),("));
+#endif
         sprintf(temp, "%lu", CPU_Packet_Received_Count);
         client.print(temp);
+        LogFile.write(temp);
+#ifdef PRINT_IO
         Serial.print(temp);
-
         Serial.print(F("),("));
+#endif
         client.print(FLD);
+        LogFile.write(FLD);
+#ifdef PRINT_IO
         Serial.print(FLD, DEC);
-
-        Serial.print(F("),[Data]("));
+        Serial.print(F("),("));
+#endif
         sprintf(temp, "%lu", CPU_Packet_Transmitted_Count);
         client.print(temp);
+        LogFile.write(temp);
+#ifdef PRINT_IO
         Serial.print(temp);
-
         Serial.print(F("),("));
+#endif
         client.print(FLD);
+        LogFile.write(FLD);
+#ifdef PRINT_IO
         Serial.print(FLD);
-
-        Serial.print(F("),[Data]("));
+        Serial.print(F("),("));
+#endif
         sprintf(temp, "%lu", ALT_Packet_Received_Count);
         client.print(temp);
+        LogFile.write(temp);
+#ifdef PRINT_IO
         Serial.print(temp);
-
         Serial.print(F("),("));
+#endif
         client.print(FLD);
+        LogFile.write(FLD);
+#ifdef PRINT_IO
         Serial.print(FLD);
-
-        Serial.print(F("),[Data]("));
+        Serial.print(F("),("));
+#endif
         sprintf(temp, "%lu", ALT_Packet_Transmitted_Count);
         client.print(temp);
+        LogFile.write(temp);
+#ifdef PRINT_IO
         Serial.print(temp);
-
         Serial.print(F("),("));
+#endif
         client.print(FLD);
+        LogFile.write(FLD);
+#ifdef PRINT_IO
         Serial.print(FLD, DEC);
-
-        Serial.print(F("),[Data]("));
+        Serial.print(F("),("));
+#endif
         sprintf(temp, "%lu", AZI_Packet_Received_Count);
         client.print(temp);
+        LogFile.write(temp);
+#ifdef PRINT_IO
         Serial.print(temp);
-
         Serial.print(F("),("));
+#endif
         client.print(FLD);
+        LogFile.write(FLD);
+#ifdef PRINT_IO
         Serial.print(FLD, DEC);
-
-        Serial.print(F("),[Data]("));
+        Serial.print(F("),("));
+#endif
         sprintf(temp, "%lu", AZI_Packet_Transmitted_Count);
         client.print(temp);
+        LogFile.write(temp);
+#ifdef PRINT_IO
         Serial.print(temp);
-
         Serial.print(F("),("));
+#endif
         client.print(FLD);
+        LogFile.write(FLD);
+#ifdef PRINT_IO
         Serial.print(FLD, DEC);
-
-        Serial.print(F("),[Data]("));
+        Serial.print(F("),("));
+#endif
         sprintf(temp, "%lu", FOC_Packet_Received_Count);
         client.print(temp);
+        LogFile.write(temp);
+#ifdef PRINT_IO
         Serial.print(temp);
-
         Serial.print(F("),("));
+#endif
         client.println(FLD);
+        LogFile.write(FLD);
+#ifdef PRINT_IO
         Serial.print(FLD, DEC);
-
-        Serial.print(F("),[Data]("));
+        Serial.print(F("),("));
+#endif
         sprintf(temp, "%lu", FOC_Packet_Transmitted_Count);
         client.print(temp);
+        LogFile.write(temp);
+#ifdef PRINT_IO
         Serial.print(temp);
-
         Serial.print(F("),("));
+#endif
         client.print(FLD);
+        LogFile.write(FLD);
+#ifdef PRINT_IO
         Serial.print(FLD, DEC);
+#endif
         break;
     }
     case Retrieve: {
-        Serial.print(F("),[Data]("));
+#ifdef PRINT_IO
+        Serial.print(F("),("));
+#endif
         client.print(Retrieved_Timestamp);
+        for (int i = 0; i < Retrieved_Timestamp.length(); i++) {
+            LogFile.write(Retrieved_Timestamp[i]);
+        }
+#ifdef PRINT_IO
         Serial.print(Retrieved_Timestamp);
-
         Serial.print(F("),("));
+#endif
         client.print(FLD);
+        LogFile.write(FLD);
+#ifdef PRINT_IO
         Serial.print(FLD, DEC);
-
-        Serial.print(F("),[Data]("));
-        client.print(Retrieved_Message);
-        client.print(Retrieved_Message);
-
         Serial.print(F("),("));
+#endif
+        client.print(Retrieved_Message);
+        for (int i = 0; i < Retrieved_Message.length(); i++) {
+            LogFile.write(Retrieved_Message[i]);
+        }
+#ifdef PRINT_IO
+        Serial.print(Retrieved_Message);
+        Serial.print(F("),("));
+#endif
         client.print(FLD);
+        LogFile.write(FLD);
+#ifdef PRINT_IO
         Serial.print(FLD, DEC);
+#endif
         break;
     }
     case DateTime: {
-        Serial.print(F("),[Data]("));
+#ifdef PRINT_IO
+        Serial.print(F("),("));
+#endif
         client.print(Current_Date);
+        for (unsigned int i = 0; i < Current_Date.length(); i++) {
+            LogFile.write(Current_Date[i]);
+        }
+#ifdef PRINT_IO
         Serial.print(Current_Date);
-
         Serial.print(F("),("));
+#endif
         client.print(FLD);
+        LogFile.write(FLD);
+#ifdef PRINT_IO
         Serial.print(FLD, DEC);
-
-        Serial.print(F("),[Data]("));
+        Serial.print(F("),("));
+#endif
         client.print(Current_Time);
+        for (unsigned int i = 0; i < Current_Time.length(); i++) {
+            LogFile.write(Current_Time[i]);
+        }
+#ifdef PRINT_IO
         Serial.print(Current_Time);
-
         Serial.print(F("),("));
+#endif
         client.print(FLD);
+        LogFile.write(FLD);
+#ifdef PRINT_IO
         Serial.print(FLD, DEC);
+#endif
         break;
     }
     }
+#ifdef PRINT_IO
     Serial.print(F("),("));
+#endif
     client.print(ETX);
+    LogFile.write(ETX);
+#ifdef PRINT_IO
     Serial.print(ETX, DEC);
-
     Serial.print(F("),("));
+#endif
     client.print(EOT);
+    LogFile.write(EOT);
+#ifdef PRINT_IO
     Serial.print(EOT, DEC);
-
+#endif
+    LogFile.println();
+    LogFile.close();
+    LogFile.flush();
+#ifdef PRINT_IO
     Serial.println(F(")"));
+#endif
     CPU_Packet_Transmitted_Count++;
 }
-void Transmit_Packet_to_Target(char target, char* data) {
+void Transmit_Packet_to_Target(char target, char* data, int length) {
     switch (target) {
     case CPU: {
         if (bitRead(Device_Status, CPU_Status)) {
-            for (unsigned int i = 0; i < sizeof(data); i++) {
+            for (unsigned int i = 0; i < length; i++) {
                 while (!server.availableForWrite()) {
                     console_print(true, F("Waiting for server available"));
                     delay(10);
@@ -1060,78 +1287,109 @@ void Transmit_Packet_to_Target(char target, char* data) {
                 server.write(data[i]);
             }
             console_print(true, F("Packet sent to CPU"));
+            Save_Packet_to_Log_File(target, data, length, OUTGOING);
             CPU_Packet_Transmitted_Count++;
         }
         break;
     }
     case ALT: {
-        for (unsigned int i = 0; i < sizeof(data); i++) {
+        for (unsigned int i = 0; i < length; i++) {
             while (!Altitude_Port.availableForWrite()) {
                 delay(10);
             }
             Altitude_Port.write(data[i]);
         }
         console_print(true, F("Packet sent to Altitude"));
+        Save_Packet_to_Log_File(target, data, length, OUTGOING);
         ALT_Packet_Transmitted_Count++;
         break;
     }
     case AZI: {
-        for (unsigned int i = 0; i < sizeof(data); i++) {
+        for (unsigned int i = 0; i < length; i++) {
             while (!Azimuth_Port.availableForWrite()) {
                 delay(10);
             }
             Azimuth_Port.write(data[i]);
         }
         console_print(true, F("Packet sent to Azimuth"));
+        Save_Packet_to_Log_File(target, data, length, OUTGOING);
         AZI_Packet_Transmitted_Count++;
         break;
     }
     case BTH: {
-        for (unsigned int i = 0; i < sizeof(data); i++) {
+        for (unsigned int i = 0; i < length; i++) {
             while (!Altitude_Port.availableForWrite()) {
                 delay(10);
             }
-            Altitude_Port.write(data[i]);
+            if (i != TARGET) {
+                Altitude_Port.write(data[i]);
+            }
+            else {
+                Altitude_Port.write(ALT);
+            }
             while (!Azimuth_Port.availableForWrite()) {
                 delay(10);
             }
-            Azimuth_Port.write(data[i]);
+            if (i != TARGET) {
+                Azimuth_Port.write(data[i]);
+            }
+            else {
+                Azimuth_Port.write(AZI);
+            }
         }
+        Save_Packet_to_Log_File(target, data, length, OUTGOING);
         console_print(true, F("Packet sent to Altitude and Azimuth"));
         ALT_Packet_Transmitted_Count++;
         AZI_Packet_Transmitted_Count++;
         break;
     }
     case FOC: {
-        for (unsigned int i = 0; i < sizeof(data); i++) {
+        for (unsigned int i = 0; i < length; i++) {
             while (!Focuser_Port.availableForWrite()) {
                 delay(10);
             }
             Focuser_Port.write(data[i]);
         }
+        Save_Packet_to_Log_File(target, data, length, OUTGOING);
         console_print(true, F("Packet sent to Focuser"));
         FOC_Packet_Received_Count++;
         break;
     }
     case ALL: {
-        for (unsigned int i = 0; i < sizeof(data); i++) {
+        for (unsigned int i = 0; i < length; i++) {
             while (!Altitude_Port.availableForWrite()) {
                 delay(10);
             }
-            Altitude_Port.write(data[i]);
+            if (i != TARGET) {
+                Altitude_Port.write(data[i]);
+            }
+            else {
+                Altitude_Port.write(ALT);
+            }
             while (!Azimuth_Port.availableForWrite()) {
                 delay(10);
             }
-            Azimuth_Port.write(data[i]);
+            if (i != TARGET) {
+                Azimuth_Port.write(data[i]);
+            }
+            else {
+                Azimuth_Port.write(AZI);
+            }
             while (!Focuser_Port.availableForWrite()) {
                 delay(10);
             }
-            Focuser_Port.write(data[i]);
-            ALT_Packet_Transmitted_Count++;
-            AZI_Packet_Transmitted_Count++;
-            FOC_Packet_Transmitted_Count++;
-            console_print(true, F("Packet sent to All Devices"));
+            if (i != TARGET) {
+                Focuser_Port.write(data[i]);
+            }
+            else {
+                Focuser_Port.write(FOC);
+            }
         }
+        ALT_Packet_Transmitted_Count++;
+        AZI_Packet_Transmitted_Count++;
+        FOC_Packet_Transmitted_Count++;
+        Save_Packet_to_Log_File(target, data, length, OUTGOING);
+        console_print(true, F("Packet sent to All Devices"));
         break;
     }
     default: {
@@ -1160,11 +1418,20 @@ void Check_Log_File() {
     }
     else {
         console_print(true, F("\tLog File Created Successfully"));
-        LogFile.print(__DATE__);                                        // write the first record to file
-        LogFile.print(" ");
-        LogFile.print(__TIME__);
+        if (!bitRead(Device_Status, Date_Status)) {
+            console_print(false, F("Writing Compiler Date and Time to Log File: "));
+            printBuildDateTime(formattedDateTime);
+            Serial.println(formattedDateTime);
+            LogFile.print(formattedDateTime);
+        }
+        else {
+            console_print(false, F("Writing Acquired Date and Time to Log File: "));
+            LogFile.print(Current_Date_and_Time);
+            Serial.println(Current_Date_and_Time);
+        }
         LogFile.println(",File Started");
         LogFile.close();
+        LogFile.flush();
     }
 #ifdef DISPLAY_FREE_MEMORY
     Serial.print("Free memory after closing file: ");
@@ -1348,11 +1615,11 @@ void Update_Time_and_Date() {
             trys++;
         }
         if (trys >= Number_of_TimeServers) {
-            console_print(true, F("ntp server update failed"));
+            console_print(true, F("NTP server update failed"));
             bitWrite(Device_Status, Date_Status, 0);
         }
         else {
-            console_print(true, F("ntp server update success"));
+            console_print(true, F("NTP server update success"));
             prevDisplay = minute();
             Format_Date_and_Time(true);
             Clock_Display();
@@ -1362,6 +1629,7 @@ void Update_Time_and_Date() {
     else {
         if (minute() != prevDisplay) {                 // Display the time if it has changed by more than a second.
             prevDisplay = minute();
+            Format_Date_and_Time(true);
             Clock_Display();
         }
     }
@@ -1432,6 +1700,27 @@ void Print_FreeMemory() {
     console_print(false, F("Free Memory; "));
     Serial.println(freeMemory());
 }
+void printBuildDateTime(char* formattedDateTime) {
+    // `__DATE__` is in "Mmm dd yyyy" format
+    // `__TIME__` is in "hh:mm:ss" format
+    const char* months = "JanFebMarAprMayJunJulAugSepOctNovDec";
+    char monthStr[4];
+    int day, year, month;
+    int hour, minute, second;
+    // Extract month, day, and year from __DATE__
+    sscanf(__DATE__, "%3s %2d %4d", monthStr, &day, &year);
+    // Convert month abbreviation to numeric value (1-12)
+    month = (strstr(months, monthStr) - months) / 3 + 1;
+    // Extract hour, minute, and second from __TIME__
+    sscanf(__TIME__, "%2d:%2d:%2d", &hour, &minute, &second);
+    // Format the date and time as "yyyy/mm/dd hh:mm:ss"
+    snprintf(formattedDateTime, sizeof(formattedDateTime), "%04d/%02d/%02d %02d:%02d:%02d",
+        year, month, day, hour, minute, second);
+    // Print the formatted date and time
+    //Serial.println(formattedDateTime);
+}
+
+
 /*
 void console_print(bool line_feed, const __FlashStringHelper* message) {
     Serial.print(millis(), DEC);  // Print the current timestamp
