@@ -11,8 +11,8 @@
         b) Otherwise forward the received packet to the indicated target
     2. Receive packets of information from the attached devices
         a)  Forward the received packets to the indicated target
-*/
-/* Version Control --------------------------------------------------------------------------------
+
+        Version Control --------------------------------------------------------------------------------
 Date		Version Description
 27/01/2018  1.0
 11/05/2021	1.1     Updated to be compatible with Telescope and Focuser
@@ -35,9 +35,10 @@ Date		Version Description
 07/11/2024  2.6     Day of Week calculation added
 09/11/2024  2.7     Simulations Debugged and all working
 16/11/2024  2.8     Simulation code removed
+27/11/2024  2.9     Retrieve removed, client.print replaced with client.write
 */
-constexpr double Firmware_Version = (double)2.8;
-// -------------------------------------------------------------------------------------------------
+constexpr double Firmware_Version = (double)2.9;
+// Incluions --------------------------------------------------------------------------------------
 #include <DHT.h>
 #include <DHT_U.h>
 #include <Adafruit_Sensor.h>
@@ -50,7 +51,7 @@ constexpr double Firmware_Version = (double)2.8;
 #include <SPI.h>
 #include <time.h>
 #include <TimeLib.h>
-// Inclusions -------------------------------------------------------------------------------------
+// Compiler Definitions ---------------------------------------------------------------------------
 //#define SD_DEBUG
 //#define DISPLAY_FREE_MEMORY
 #define PRINT_IO
@@ -61,7 +62,6 @@ constexpr int Altitude_baud = (int)38400;
 constexpr int Azimuth_baud = (int)38400;
 constexpr int Focuser_baud = (int)38400;
 constexpr unsigned long Led_On_Time = (unsigned long)250;
-// Constants ---------------------------------------------------------------------------------------
 // Freememory calculater - Returns the current amount of free memory in bytes ----------------------
 extern unsigned int __bss_end;
 extern void* __brkval;
@@ -80,14 +80,15 @@ constexpr uint8_t Azimuth_RX_pin = 17;      // Azimuth Port RX
 constexpr uint8_t Focuser_TX_pin = 14;      // Focuser Port TX
 constexpr uint8_t Focuser_RX_pin = 15;      // Focuser Port RX 
 // Peripheral Connections --------------------------------------------------------------------------
-constexpr uint8_t RUN_Active_led_pin = 3;   // RUN led
-constexpr uint8_t SD_CS = 4;                // SD chip select
-constexpr uint8_t Ambient_Sensor_pin = 5;	// ambient temperature and humidity pin
-constexpr uint8_t Fan_pin = 6;              // fan (relay) pin
-constexpr uint8_t Reset_Switch_pin = 7;     // reset switch pin
-constexpr uint8_t Shield_led_pin = 9;       // led on the Ethernet Shield 2
-constexpr uint8_t W5500_CS = 10;            // Ethernet chip select
-constexpr uint8_t Voltage_pin = A2;         // A2	motor_voltage
+constexpr uint8_t RUN_Active_led_pin = 3;   // RUN led                          Blue
+constexpr uint8_t SD_CS = 4;                // SD chip select                   Internal
+constexpr uint8_t Ambient_Sensor_pin = 5;	// Ambient temperature pin          Pink
+constexpr uint8_t Fan_pin = 6;              // Fan (relay) pin                  Brown
+constexpr uint8_t Reset_Switch_pin = 7;     // Reset Switch pin                 Yellow
+constexpr uint8_t Reset_Light_pin = 8;      // Reset Switch Light pin           Purple
+constexpr uint8_t Shield_led_pin = 9;       // Led on the Ethernet Shield 2     Internal
+constexpr uint8_t W5500_CS = 10;            // Ethernet chip select             Internal
+constexpr uint8_t Voltage_pin = A2;         // A2	Motor_voltage               Green
 // -------------------------------------------------------------------------------------------------
 constexpr double Fan_Switch_On_Temperature = 30.00;     // Temperature at which fan should turn on
 constexpr double Fan_Switch_Off_Temperature = 25.00;    // Temperature at which fan should turn off
@@ -109,13 +110,7 @@ IPAddress gateway(192, 168, 68, 1);
 IPAddress subnet(255, 255, 0, 0);
 EthernetServer server(80);                                  // Create a server listening on port 80.
 EthernetClient client;                                      // Create an Ethernet Client (CPU)
-/*
-0.uk.pool.ntp.org:  109.74.206.120, 176.58.109.199,     94.125.129.7,   5.77.45.219
-1.uk.pool.ntp.org:  93.93.131.118,  185.53.93.157,      158.43.128.33,  134.0.16.1
-2.uk.pool.ntp.org:  5.77.45.219,    82.219.4.30,        176.58.109.199, 85.119.80.232
-3.uk.pool.ntp.org:  149.18.38.230,  176.126.242.239,    91.212.90.20,   188.114.116.1
-*/
-// IPAddress timeServer(216, 23, 247, 62);                     // NTP server from https://tf.nist.gov/tf-cgi/servers.cgi
+// NTP server from https://tf.nist.gov/tf-cgi/servers.cgi
 IPAddress timeServers[] = {
     {109,74,206,120},                           // [0]
     {176,58,109,199},                           // [1]
@@ -335,7 +330,7 @@ void setup() {
     } while (trys < Number_of_TimeServers);
     if (trys >= Number_of_TimeServers) {
         bitWrite(Device_Status, Date_Status, 0);                          // set the status bit Date and Time false
-        printBuildDateTime(formattedDateTime);
+        printBuildDateTime(formattedDateTime, sizeof(formattedDateTime));
         Current_Date_and_Time = String(formattedDateTime);
         console_print(true, F("Failed to Get Date and Time")); // This line is for error handling, adjust as needed
         snprintf(Display_Buffer, sizeof(Display_Buffer), "\tDate and Time Set to :\%s", Current_Date_and_Time.c_str());
@@ -463,7 +458,7 @@ void Save_Packet_to_Log_File(uint8_t target, char* data, int length, bool direct
             LogFile.print(Current_Date_and_Time);                        // save real timestamp
         }
         else {
-            printBuildDateTime(formattedDateTime);
+            printBuildDateTime(formattedDateTime, sizeof(formattedDateTime));
 #ifdef PRINT_IO
             Serial.print("("); Serial.print(formattedDateTime); Serial.print("),(");
 #endif
@@ -814,57 +809,6 @@ bool Process_CPU_Packet() {                                         // Process a
             }
             break;
         }
-        case (Retrieve): {
-            int character_count = 0;
-            char field[25];
-            int datafieldNo = 0;
-            char datatemp;
-            console_print(true, F("Retrieve Get Received from CPU"));
-            if (Incoming_Packet_from_CPU[TYPE] == GET) {
-                LogFile = SD.open("log.csv", FILE_READ);                 // open the SD file
-                console_print(true, F("\tProcessing Log.csv"));
-                if (!LogFile) {                                                                    // oops - file not available!
-                    Wait_for_Reset_Switch(F("Error re-opening Log File"));                                                             // Reset will restart the processor so no return
-                }
-                else {
-                    while (LogFile.available()) {                           // whilst there  data are the log file
-                        datatemp = LogFile.read();                          // read character into datatemp
-                        field[character_count++] = datatemp;                            // add it to the csvfield string
-                        if (datatemp == '\n' || datatemp == ',') {          // end of field or line detected
-                            field[character_count - 1] = '\0';              // insert termination character where the ',' or '\n' was
-                            switch (datafieldNo) {                          // store the field into appropriate variable
-                            case 0: {
-                                Retrieved_Timestamp = field;
-                                break;
-                            }
-                            case 1: {
-                                Retrieved_Direction = (bool)field;
-                            }
-                            case 2: {
-                                Retrieved_Message = field;
-                                break;
-                            }
-                            }
-                            datafieldNo++;
-                            field[0] = '\0';
-                            character_count = 0;
-                        }
-                        if (datatemp == '\n') {                             // at this point the obtained record has been retrieved from SD
-                            Send_Reply_to_CPU(Retrieve);
-                            wdt_reset();                                                            // keep watch dog timer active
-                            delay(1000);                                    // delay 1 second before sending next record
-                        }
-                    }
-                    LogFile.close();
-                    LogFile.flush();
-                    SD.remove("/Log.csv");                                  // delete the log file
-                }
-            }
-            else {
-                console_print(true, F("Illegal Retrieve Type Received"));
-            }
-            break;
-        }
         case (DateTime): {
             if (Incoming_Packet_from_CPU[TYPE] == GET) {
                 console_print(true, F("Date and Time Get Received from CPU"));
@@ -939,50 +883,50 @@ void Send_Reply_to_CPU(int command) {
     LogFile.print(Current_Date_and_Time);                        // save real timestamp
     LogFile.print(",");                             // field delimiter
     LogFile.print("to CPU,");
-    client.print(SOH);                            // Byte 0   SOH
+    client.write(SOH);                            // Byte 0   SOH
     LogFile.write(SOH);
 #ifdef PRINT_IO
     Serial.print(F("("));
     Serial.print(SOH, DEC);
     Serial.print(F("),("));
 #endif
-    client.print(CPU);                            // Byte 1   Target
+    client.write(CPU);                            // Byte 1   Target
     LogFile.write(CPU);
 #ifdef PRINT_IO
     Serial.print(CPU, DEC);
     Serial.print(F("),("));
 #endif
-    client.print(HUB);                            // Byte 2   Source
+    client.write(HUB);                            // Byte 2   Source
     LogFile.write(HUB);
 #ifdef PRINT_IO
     Serial.print(HUB, DEC);
     Serial.print(F("),("));
 #endif
-    client.print(REP);                            // Byte 3   Packet Type
+    client.write(REP);                            // Byte 3   Packet Type
 #ifdef PRINT_IO
     Serial.print(REP, DEC);
     Serial.print(F("),("));
 #endif
-    client.print(command);                        // Byte 4   Command
+    client.write(command);                        // Byte 4   Command
     LogFile.write(command);
 #ifdef PRINT_IO
     Serial.print(command, DEC);
     Serial.print(F("),("));
 #endif
     LogFile.write(STX);
-    client.print(STX);                            // Byte 5   STX
+    client.write(STX);                              // Byte 5   STX
 #ifdef PRINT_IO
     Serial.print(STX, DEC);
     Serial.print(F("),("));
 #endif
-    sprintf(temp, "%d", Device_Status);
-    client.print(temp);                           // Byte 6 & 7
+    itoa(Device_Status, temp, 10);
+    client.write(temp, strlen(temp));               // Byte 6 & 7
     LogFile.write(temp);
 #ifdef PRINT_IO
     Serial.print(temp);
     Serial.print(F("),("));
 #endif
-    client.print(FLD);                            // Byte 8
+    client.write(FLD);                            // Byte 8
     LogFile.write(FLD);
 #ifdef PRINT_IO
     Serial.print(FLD, DEC);
@@ -993,39 +937,39 @@ void Send_Reply_to_CPU(int command) {
         Serial.print(F("),("));
 #endif
         dtostrf(Ambient_Temperature, 4, 2, temp);
-        client.print(temp);
+        client.write(temp);
         LogFile.write(temp);
 #ifdef PRINT_IO
         Serial.print(temp);
         Serial.print(F("),("));
 #endif
-        client.print(FLD);
+        client.write(FLD);
         LogFile.write(FLD);
 #ifdef PRINT_IO
         Serial.print(FLD, DEC);
         Serial.print(F("),("));
 #endif
         dtostrf(Ambient_Humidity, 4, 2, temp);
-        client.print(temp);
+        client.write(temp);
         LogFile.write(temp);
 #ifdef PRINT_IO
         Serial.print(temp);
         Serial.print(F("),("));
 #endif
-        client.print(FLD);
+        client.write(FLD);
         LogFile.write(FLD);
 #ifdef PRINT_IO
         Serial.print(FLD, DEC);
         Serial.print(F("),("));
 #endif
         dtostrf(Motor_Voltage, 4, 2, temp);
-        client.print(temp);
+        client.write(temp);
         LogFile.write(temp);
 #ifdef PRINT_IO
         Serial.print(temp);
         Serial.print(F("),("));
 #endif
-        client.print(FLD);
+        client.write(FLD);
         LogFile.write(FLD);
 #ifdef PRINT_IO
         Serial.print(FLD, DEC);
@@ -1033,13 +977,13 @@ void Send_Reply_to_CPU(int command) {
 #endif
         Free_Memory = freeMemory();
         itoa(Free_Memory, temp, 10);
-        client.print(temp);
+        client.write(temp);
         LogFile.write(temp);
 #ifdef PRINT_IO
         Serial.print(temp);
         Serial.print(F("),("));
 #endif
-        client.print(FLD);
+        client.write(FLD);
         LogFile.write(FLD);
 #ifdef PRINT_IO
         Serial.print(FLD, DEC);
@@ -1051,26 +995,26 @@ void Send_Reply_to_CPU(int command) {
         Serial.print(F("),("));
 #endif
         dtostrf(Firmware_Version, 4, 2, temp);
-        client.print(temp);
+        client.write(temp);
         LogFile.write(temp);
 #ifdef PRINT_IO
         Serial.print(temp);
         Serial.print(F("),("));
 #endif
-        client.print(FLD);
+        client.write(FLD);
         LogFile.write(FLD);
 #ifdef PRINT_IO
         Serial.print(FLD, DEC);
         Serial.print(F("),("));
 #endif
         dtostrf(Protocol_Version, 4, 2, temp);
-        client.print(temp);
+        client.write(temp);
         LogFile.write(temp);
 #ifdef PRINT_IO
         Serial.print(temp);
         Serial.print(F("),("));
 #endif
-        client.print(FLD);
+        client.write(FLD);
         LogFile.write(FLD);
 #ifdef PRINT_IO
         Serial.print(FLD, DEC);
@@ -1082,140 +1026,95 @@ void Send_Reply_to_CPU(int command) {
         Serial.print(F("),("));
 #endif
         sprintf(temp, "%lu", CPU_Packet_Received_Count);
-        client.print(temp);
+        client.write(temp);
         LogFile.write(temp);
 #ifdef PRINT_IO
         Serial.print(temp);
         Serial.print(F("),("));
 #endif
-        client.print(FLD);
+        client.write(FLD);
         LogFile.write(FLD);
 #ifdef PRINT_IO
         Serial.print(FLD, DEC);
         Serial.print(F("),("));
 #endif
         sprintf(temp, "%lu", CPU_Packet_Transmitted_Count);
-        client.print(temp);
+        client.write(temp);
         LogFile.write(temp);
 #ifdef PRINT_IO
         Serial.print(temp);
         Serial.print(F("),("));
 #endif
-        client.print(FLD);
+        client.write(FLD);
         LogFile.write(FLD);
 #ifdef PRINT_IO
         Serial.print(FLD);
         Serial.print(F("),("));
 #endif
         sprintf(temp, "%lu", ALT_Packet_Received_Count);
-        client.print(temp);
+        client.write(temp);
         LogFile.write(temp);
 #ifdef PRINT_IO
         Serial.print(temp);
         Serial.print(F("),("));
 #endif
-        client.print(FLD);
+        client.write(FLD);
         LogFile.write(FLD);
 #ifdef PRINT_IO
         Serial.print(FLD);
         Serial.print(F("),("));
 #endif
         sprintf(temp, "%lu", ALT_Packet_Transmitted_Count);
-        client.print(temp);
+        client.write(temp);
         LogFile.write(temp);
 #ifdef PRINT_IO
         Serial.print(temp);
         Serial.print(F("),("));
 #endif
-        client.print(FLD);
+        client.write(FLD);
         LogFile.write(FLD);
 #ifdef PRINT_IO
         Serial.print(FLD, DEC);
         Serial.print(F("),("));
 #endif
         sprintf(temp, "%lu", AZI_Packet_Received_Count);
-        client.print(temp);
+        client.write(temp);
         LogFile.write(temp);
 #ifdef PRINT_IO
         Serial.print(temp);
         Serial.print(F("),("));
 #endif
-        client.print(FLD);
+        client.write(FLD);
         LogFile.write(FLD);
 #ifdef PRINT_IO
         Serial.print(FLD, DEC);
         Serial.print(F("),("));
 #endif
         sprintf(temp, "%lu", AZI_Packet_Transmitted_Count);
-        client.print(temp);
+        client.write(temp);
         LogFile.write(temp);
 #ifdef PRINT_IO
         Serial.print(temp);
         Serial.print(F("),("));
 #endif
-        client.print(FLD);
+        client.write(FLD);
         LogFile.write(FLD);
 #ifdef PRINT_IO
         Serial.print(FLD, DEC);
         Serial.print(F("),("));
 #endif
         sprintf(temp, "%lu", FOC_Packet_Received_Count);
-        client.print(temp);
+        client.write(temp);
         LogFile.write(temp);
 #ifdef PRINT_IO
         Serial.print(temp);
         Serial.print(F("),("));
 #endif
-        client.println(FLD);
+        client.write(FLD);
         LogFile.write(FLD);
 #ifdef PRINT_IO
         Serial.print(FLD, DEC);
         Serial.print(F("),("));
-#endif
-        sprintf(temp, "%lu", FOC_Packet_Transmitted_Count);
-        client.print(temp);
-        LogFile.write(temp);
-#ifdef PRINT_IO
-        Serial.print(temp);
-        Serial.print(F("),("));
-#endif
-        client.print(FLD);
-        LogFile.write(FLD);
-#ifdef PRINT_IO
-        Serial.print(FLD, DEC);
-#endif
-        break;
-    }
-    case Retrieve: {
-#ifdef PRINT_IO
-        Serial.print(F("),("));
-#endif
-        client.print(Retrieved_Timestamp);
-        for (int i = 0; i < Retrieved_Timestamp.length(); i++) {
-            LogFile.write(Retrieved_Timestamp[i]);
-        }
-#ifdef PRINT_IO
-        Serial.print(Retrieved_Timestamp);
-        Serial.print(F("),("));
-#endif
-        client.print(FLD);
-        LogFile.write(FLD);
-#ifdef PRINT_IO
-        Serial.print(FLD, DEC);
-        Serial.print(F("),("));
-#endif
-        client.print(Retrieved_Message);
-        for (int i = 0; i < Retrieved_Message.length(); i++) {
-            LogFile.write(Retrieved_Message[i]);
-        }
-#ifdef PRINT_IO
-        Serial.print(Retrieved_Message);
-        Serial.print(F("),("));
-#endif
-        client.print(FLD);
-        LogFile.write(FLD);
-#ifdef PRINT_IO
-        Serial.print(FLD, DEC);
 #endif
         break;
     }
@@ -1223,7 +1122,7 @@ void Send_Reply_to_CPU(int command) {
 #ifdef PRINT_IO
         Serial.print(F("),("));
 #endif
-        client.print(Current_Date);
+        //       client.write(Current_Date);
         for (unsigned int i = 0; i < Current_Date.length(); i++) {
             LogFile.write(Current_Date[i]);
         }
@@ -1231,13 +1130,13 @@ void Send_Reply_to_CPU(int command) {
         Serial.print(Current_Date);
         Serial.print(F("),("));
 #endif
-        client.print(FLD);
+        client.write(FLD);
         LogFile.write(FLD);
 #ifdef PRINT_IO
         Serial.print(FLD, DEC);
         Serial.print(F("),("));
 #endif
-        client.print(Current_Time);
+        //        client.write(Current_Time);
         for (unsigned int i = 0; i < Current_Time.length(); i++) {
             LogFile.write(Current_Time[i]);
         }
@@ -1245,7 +1144,7 @@ void Send_Reply_to_CPU(int command) {
         Serial.print(Current_Time);
         Serial.print(F("),("));
 #endif
-        client.print(FLD);
+        client.write(FLD);
         LogFile.write(FLD);
 #ifdef PRINT_IO
         Serial.print(FLD, DEC);
@@ -1256,30 +1155,32 @@ void Send_Reply_to_CPU(int command) {
 #ifdef PRINT_IO
     Serial.print(F("),("));
 #endif
-    client.print(ETX);
-    LogFile.write(ETX);
+    if (command != Retrieve) {
+        client.write(ETX);
+        LogFile.write(ETX);
 #ifdef PRINT_IO
-    Serial.print(ETX, DEC);
-    Serial.print(F("),("));
+        Serial.print(ETX, DEC);
+        Serial.print(F("),("));
 #endif
-    client.print(EOT);
-    LogFile.write(EOT);
+        client.write(EOT);
+        LogFile.write(EOT);
 #ifdef PRINT_IO
-    Serial.print(EOT, DEC);
+        Serial.print(EOT, DEC);
 #endif
-    LogFile.println();
-    LogFile.close();
-    LogFile.flush();
+        LogFile.println();
+        LogFile.close();
+        LogFile.flush();
 #ifdef PRINT_IO
-    Serial.println(F(")"));
+        Serial.println(F(")"));
 #endif
+    }
     CPU_Packet_Transmitted_Count++;
 }
 void Transmit_Packet_to_Target(char target, char* data, int length) {
     switch (target) {
     case CPU: {
         if (bitRead(Device_Status, CPU_Status)) {
-            for (unsigned int i = 0; i < length; i++) {
+            for (int i = 0; i < length; i++) {
                 while (!server.availableForWrite()) {
                     console_print(true, F("Waiting for server available"));
                     delay(10);
@@ -1293,7 +1194,7 @@ void Transmit_Packet_to_Target(char target, char* data, int length) {
         break;
     }
     case ALT: {
-        for (unsigned int i = 0; i < length; i++) {
+        for (int i = 0; i < length; i++) {
             while (!Altitude_Port.availableForWrite()) {
                 delay(10);
             }
@@ -1305,7 +1206,7 @@ void Transmit_Packet_to_Target(char target, char* data, int length) {
         break;
     }
     case AZI: {
-        for (unsigned int i = 0; i < length; i++) {
+        for (int i = 0; i < length; i++) {
             while (!Azimuth_Port.availableForWrite()) {
                 delay(10);
             }
@@ -1317,7 +1218,7 @@ void Transmit_Packet_to_Target(char target, char* data, int length) {
         break;
     }
     case BTH: {
-        for (unsigned int i = 0; i < length; i++) {
+        for (int i = 0; i < length; i++) {
             while (!Altitude_Port.availableForWrite()) {
                 delay(10);
             }
@@ -1344,7 +1245,7 @@ void Transmit_Packet_to_Target(char target, char* data, int length) {
         break;
     }
     case FOC: {
-        for (unsigned int i = 0; i < length; i++) {
+        for (int i = 0; i < length; i++) {
             while (!Focuser_Port.availableForWrite()) {
                 delay(10);
             }
@@ -1356,7 +1257,7 @@ void Transmit_Packet_to_Target(char target, char* data, int length) {
         break;
     }
     case ALL: {
-        for (unsigned int i = 0; i < length; i++) {
+        for (int i = 0; i < length; i++) {
             while (!Altitude_Port.availableForWrite()) {
                 delay(10);
             }
@@ -1420,7 +1321,7 @@ void Check_Log_File() {
         console_print(true, F("\tLog File Created Successfully"));
         if (!bitRead(Device_Status, Date_Status)) {
             console_print(false, F("Writing Compiler Date and Time to Log File: "));
-            printBuildDateTime(formattedDateTime);
+            printBuildDateTime(formattedDateTime, sizeof(formattedDateTime));
             Serial.println(formattedDateTime);
             LogFile.print(formattedDateTime);
         }
@@ -1501,6 +1402,10 @@ void Check_Lights() {
                 digitalWrite(Shield_led_pin, OFF);                              // turn the Shield led off
             }
         }
+        digitalWrite(Reset_Light_pin, ON);
+    }
+    else {
+        digitalWrite(Reset_Light_pin, OFF);
     }
 }
 uint16_t getWdtTimeoutMs() {
@@ -1700,7 +1605,7 @@ void Print_FreeMemory() {
     console_print(false, F("Free Memory; "));
     Serial.println(freeMemory());
 }
-void printBuildDateTime(char* formattedDateTime) {
+void printBuildDateTime(char* formattedDateTime, size_t bufferSize) {
     // `__DATE__` is in "Mmm dd yyyy" format
     // `__TIME__` is in "hh:mm:ss" format
     const char* months = "JanFebMarAprMayJunJulAugSepOctNovDec";
@@ -1714,7 +1619,7 @@ void printBuildDateTime(char* formattedDateTime) {
     // Extract hour, minute, and second from __TIME__
     sscanf(__TIME__, "%2d:%2d:%2d", &hour, &minute, &second);
     // Format the date and time as "yyyy/mm/dd hh:mm:ss"
-    snprintf(formattedDateTime, sizeof(formattedDateTime), "%04d/%02d/%02d %02d:%02d:%02d",
+    snprintf(formattedDateTime, bufferSize, "%04d/%02d/%02d %02d:%02d:%02d",
         year, month, day, hour, minute, second);
     // Print the formatted date and time
     //Serial.println(formattedDateTime);
