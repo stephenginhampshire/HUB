@@ -36,9 +36,10 @@ Date		Version Description
 09/11/2024  2.7     Simulations Debugged and all working
 16/11/2024  2.8     Simulation code removed
 27/11/2024  2.9     Retrieve removed, client.print replaced with client.write
+28/11/2024  2.10    Unnecessary functionality (Retrieve, Temperature and Voltage) removed
 */
-constexpr double Firmware_Version = (double)2.9;
-// Incluions --------------------------------------------------------------------------------------
+constexpr double Firmware_Version = (double)2.10;
+// Inclusions -------------------------------------------------------------------------------------
 #include <DHT.h>
 #include <DHT_U.h>
 #include <Adafruit_Sensor.h>
@@ -62,7 +63,7 @@ constexpr int Altitude_baud = (int)38400;
 constexpr int Azimuth_baud = (int)38400;
 constexpr int Focuser_baud = (int)38400;
 constexpr unsigned long Led_On_Time = (unsigned long)250;
-// Freememory calculater - Returns the current amount of free memory in bytes ----------------------
+// Freememory calculater - Returns the current amount of free memory in bytes ---------------------
 extern unsigned int __bss_end;
 extern void* __brkval;
 int freeMemory() {
@@ -71,31 +72,19 @@ int freeMemory() {
         return ((int)&free_memory) - ((int)__brkval);
     return ((int)&free_memory) - ((int)&__bss_end);
 }
-// Hardware configuration -------------------------------------------------------------------------
+// Hardware Configuration -------------------------------------------------------------------------
 // Communications Connections ---------------------------------------------------------------------
 constexpr uint8_t Altitude_TX_pin = 18;     // Altitude Port TX
 constexpr uint8_t Altitude_RX_pin = 19;     // Altitude Port RX
 constexpr uint8_t Azimuth_TX_pin = 16;      // Azimuth Port TX
 constexpr uint8_t Azimuth_RX_pin = 17;      // Azimuth Port RX
 constexpr uint8_t Focuser_TX_pin = 14;      // Focuser Port TX
-constexpr uint8_t Focuser_RX_pin = 15;      // Focuser Port RX 
-// Peripheral Connections --------------------------------------------------------------------------
-constexpr uint8_t RUN_Active_led_pin = 3;   // RUN led                          Blue
-constexpr uint8_t SD_CS = 4;                // SD chip select                   Internal
-constexpr uint8_t Ambient_Sensor_pin = 5;	// Ambient temperature pin          Pink
-constexpr uint8_t Fan_pin = 6;              // Fan (relay) pin                  Brown
-constexpr uint8_t Reset_Switch_pin = 7;     // Reset Switch pin                 Yellow
-constexpr uint8_t Reset_Light_pin = 8;      // Reset Switch Light pin           Purple
-constexpr uint8_t Shield_led_pin = 9;       // Led on the Ethernet Shield 2     Internal
+constexpr uint8_t Focuser_RX_pin = 15;      // Focuser Port RX
+constexpr uint8_t RUN_Active_led_pin = 2;   // RUN led                          Blue
+constexpr uint8_t SD_CS = 4;                // Chip Select for the SD
+constexpr uint8_t Reset_Switch_pin = 5;     // Reset Switch pin                 Yellow
 constexpr uint8_t W5500_CS = 10;            // Ethernet chip select             Internal
-constexpr uint8_t Voltage_pin = A2;         // A2	Motor_voltage               Green
-// -------------------------------------------------------------------------------------------------
-constexpr double Fan_Switch_On_Temperature = 30.00;     // Temperature at which fan should turn on
-constexpr double Fan_Switch_Off_Temperature = 25.00;    // Temperature at which fan should turn off
-// -------------------------------------------------------------------------------------------------
-double Ambient_Temperature = 0;             // Temperature value
-double Ambient_Humidity = 0;                // Humidity value
-double Motor_Voltage = 0;                   // Voltage value
+// Constants --------------------------------------------------------------------------------------
 String Retrieved_Timestamp;
 bool Retrieved_Direction = false;
 String Retrieved_Message;
@@ -109,8 +98,7 @@ IPAddress my_dns(192, 168, 68, 1);
 IPAddress gateway(192, 168, 68, 1);
 IPAddress subnet(255, 255, 0, 0);
 EthernetServer server(80);                                  // Create a server listening on port 80.
-EthernetClient client;                                      // Create an Ethernet Client (CPU)
-// NTP server from https://tf.nist.gov/tf-cgi/servers.cgi
+EthernetClient client;                                      // Create an Ethernet Client (CPU), NTP server from https://tf.nist.gov/tf-cgi/servers.cgi
 IPAddress timeServers[] = {
     {109,74,206,120},                           // [0]
     {176,58,109,199},                           // [1]
@@ -142,7 +130,7 @@ const char* Weekdays[] = {
 };
 EthernetUDP ethernet_UDP;                                   // define Ethernet UDP object and local port 8888
 unsigned int localPort = 8888;
-unsigned int ntpSyncTime = 3600;
+unsigned int ntpSyncTime = 3600;                            // update Date and Time every 3600 seconds (1 hr)
 const long timeZoneOffset = -14400L;                        // offset (in seconds) to GMT - 4 */
 const int NTP_PACKET_SIZE = 48;                             // NTP time stamp is in the first 48 bytes of the message
 byte NTP_Packet_Buffer[NTP_PACKET_SIZE];                    // Buffer to hold incoming and outgoing packets
@@ -156,9 +144,7 @@ Sd2Card card;
 SdVolume volume;
 SdFile root;
 File LogFile;
-//struct tm timeinfo;
 // -------------------------------------------------------------------------------------------------
-DHT_Unified Ambient_Sensor(Ambient_Sensor_pin, DHT22);
 Bounce Reset_Switch = Bounce();
 // Communications Variables -----------------------------------------------------------------------
 char Incoming_Packet_from_CPU[0xFF];
@@ -256,7 +242,6 @@ void setup() {
     Led_Control(RUN_Active_led_pin, ON);            // turn the run led on
     Reset_Switch.attach(Reset_Switch_pin);
     Reset_Switch.interval(5);
-    pinMode(Shield_led_pin, OUTPUT);
     console_print(true, F("Initialising SD Drive"));
     if (!card.init(SPI_HALF_SPEED, SD_CS)) {
         Wait_for_Reset_Switch(F("Initialisation Failed"));
@@ -296,7 +281,6 @@ void setup() {
     //    root.ls(LS_R | LS_DATE | LS_SIZE);    // list all files in the card with date and size
     bitWrite(Device_Status, Disk_Status, 1);
     console_print(true, F("SD Initialisation Complete"));
-
     console_print(true, F("Starting Ethernet Initialisation"));
     Ethernet.begin(mac, ip, my_dns, gateway, subnet);                         // Start Ethernet
     delay(1000);
@@ -342,37 +326,6 @@ void setup() {
     }
     bitWrite(Device_Status, Date_Status, 1);
     console_print(true, F("Date and Time Server Initialised"));
-    pinMode(Voltage_pin, INPUT);
-    pinMode(Fan_pin, OUTPUT);                                       // specify the fan pin as an output
-    console_print(true, F("Temperature and Humidity Sensor Initialisation"));
-    sensors_event_t event;
-    Ambient_Sensor.temperature().getEvent(&event);
-    if (isnan(event.temperature)) {
-        console_print(true, F("\tTemperature Invalid or Sensor not Connected"));
-        bitWrite(Device_Status, Temperature_Status, 0);
-    }
-    else {
-        snprintf(Display_Buffer, sizeof(Display_Buffer), "\tTemperature Sensor:%.2f", (double)event.temperature);
-        console_print(true, Display_Buffer);
-        bitWrite(Device_Status, Temperature_Status, 1);
-    }
-    Ambient_Sensor.humidity().getEvent(&event);
-    if (isnan(event.relative_humidity)) {
-        console_print(true, F("\tRelative Humidity Invalid or Sensor not Connected"));
-        bitWrite(Device_Status, Humidity_Status, 0);
-    }
-    else {
-        snprintf(Display_Buffer, sizeof(Display_Buffer), "\tHumidity Sensor:%.2f", (double)event.relative_humidity);
-        console_print(true, Display_Buffer);
-        bitWrite(Device_Status, Humidity_Status, 1);
-    }
-    if (!digitalRead(Voltage_pin)) {
-        bitWrite(Device_Status, Voltage_Status, 0);
-    }
-    else {
-        bitWrite(Device_Status, Voltage_Status, 1);
-    }
-    console_print(true, F("Sensor Initialisation Complete"));
     console_print(true, F("Serial Port Initialisation"));
     pinMode(Altitude_RX_pin, INPUT);
     if (digitalRead(Altitude_RX_pin)) {
@@ -442,8 +395,6 @@ void loop() {
     if (Check_Altitude_Packet_Received()) Transmit_Packet_to_Target(CPU, Incoming_Packet_from_Altitude, Altitude_Incoming_Packet_Length);
     if (Check_Azimuth_Packet_Received()) Transmit_Packet_to_Target(CPU, Incoming_Packet_from_Azimuth, Azimuth_Incoming_Packet_Length);
     if (Check_Focuser_Packet_Received()) Transmit_Packet_to_Target(CPU, Incoming_Packet_from_Focuser, Focuser_Incoming_Packet_Length);
-    Check_Lights();
-    Update_Environmental_Sensors();
     Update_Time_and_Date();
 }// end of main loop ------------------------------------------------------------------------------
 void Save_Packet_to_Log_File(uint8_t target, char* data, int length, bool direction) {
@@ -732,7 +683,7 @@ bool Check_Focuser_Packet_Received(void) {
 }
 bool Process_CPU_Packet() {                                         // Process a packet from the CPU  
     console_print(true, F("Processing Packet Received from CPU"));
-    switch (Incoming_Packet_from_CPU[TARGET]) {                          // switch on the target
+    switch (Incoming_Packet_from_CPU[TARGET]) {                     // switch on the target
     case HUB: {
 #ifdef PRINT_IO
         console_print(false, F("Packet Destination HUB: "));
@@ -833,8 +784,8 @@ bool Process_CPU_Packet() {                                         // Process a
             console_print(true, F("Unknown Command Received from CPU"));
             break;
         }
-        }                                                  // end of switch on command number
-        break;
+               break;                                              // break from case HUB
+        }
     }
     case ALT: {                                                     // send the packet to the ALT
         console_print(true, F("Packet Destination Altitude"));
@@ -869,7 +820,7 @@ bool Process_CPU_Packet() {                                         // Process a
     }
     }
     return true;
-}
+}                                                               // end of switch
 void Send_Reply_to_CPU(int command) {
     char temp[20];
 #ifdef PRINT_IO
@@ -932,64 +883,6 @@ void Send_Reply_to_CPU(int command) {
     Serial.print(FLD, DEC);
 #endif
     switch (command) {
-    case Environment: {
-#ifdef PRINT_IO
-        Serial.print(F("),("));
-#endif
-        dtostrf(Ambient_Temperature, 4, 2, temp);
-        client.write(temp);
-        LogFile.write(temp);
-#ifdef PRINT_IO
-        Serial.print(temp);
-        Serial.print(F("),("));
-#endif
-        client.write(FLD);
-        LogFile.write(FLD);
-#ifdef PRINT_IO
-        Serial.print(FLD, DEC);
-        Serial.print(F("),("));
-#endif
-        dtostrf(Ambient_Humidity, 4, 2, temp);
-        client.write(temp);
-        LogFile.write(temp);
-#ifdef PRINT_IO
-        Serial.print(temp);
-        Serial.print(F("),("));
-#endif
-        client.write(FLD);
-        LogFile.write(FLD);
-#ifdef PRINT_IO
-        Serial.print(FLD, DEC);
-        Serial.print(F("),("));
-#endif
-        dtostrf(Motor_Voltage, 4, 2, temp);
-        client.write(temp);
-        LogFile.write(temp);
-#ifdef PRINT_IO
-        Serial.print(temp);
-        Serial.print(F("),("));
-#endif
-        client.write(FLD);
-        LogFile.write(FLD);
-#ifdef PRINT_IO
-        Serial.print(FLD, DEC);
-        Serial.print(F("),("));
-#endif
-        Free_Memory = freeMemory();
-        itoa(Free_Memory, temp, 10);
-        client.write(temp);
-        LogFile.write(temp);
-#ifdef PRINT_IO
-        Serial.print(temp);
-        Serial.print(F("),("));
-#endif
-        client.write(FLD);
-        LogFile.write(FLD);
-#ifdef PRINT_IO
-        Serial.print(FLD, DEC);
-#endif
-        break;
-    }
     case FirmwareVersion: {
 #ifdef PRINT_IO
         Serial.print(F("),("));
@@ -1339,73 +1232,12 @@ void Check_Log_File() {
     Serial.println(freeMemory());
 #endif
 }
-void Update_Environmental_Sensors() {
-    sensors_event_t event;
-    Ambient_Sensor.temperature().getEvent(&event);
-    if (isnan(event.temperature)) {
-        Ambient_Temperature = 0;
-        bitWrite(Device_Status, Temperature_Status, 0);
-    }
-    else {
-        Ambient_Temperature = event.temperature;
-        bitWrite(Device_Status, Temperature_Status, 1);
-    }
-    Ambient_Sensor.humidity().getEvent(&event);			// Get humidity event and print its value.
-    if (isnan(event.relative_humidity)) {
-        Ambient_Humidity = 0;
-        bitWrite(Device_Status, Humidity_Status, 0);
-    }
-    else {
-        Ambient_Humidity = event.relative_humidity;
-        bitWrite(Device_Status, Humidity_Status, 1);
-    }
-    Motor_Voltage = digitalRead(Voltage_pin);
-    if (Ambient_Temperature > Fan_Switch_On_Temperature) {          // Turn the fan on if necessary
-        bitWrite(Device_Status, Fan_Status, 1);
-        digitalWrite(Fan_pin, ON);
-    }
-    else if (Ambient_Temperature < Fan_Switch_Off_Temperature) {     // Turn the fan off if necessary
-        digitalWrite(Fan_pin, OFF);
-        bitWrite(Device_Status, Fan_Status, 0);
-    }
-    Free_Memory = (freeMemory());
-}
 void Led_Control(uint8_t led, bool state) {
     switch (led) {
     case (RUN_Active_led_pin): {
         bitWrite(Device_Status, RUN_Status, state);
         break;
     }
-    case (Shield_led_pin): {
-        bitWrite(Device_Status, Ethernet_Status, state);
-        break;
-    }
-    }
-}
-void Check_Lights() {
-    if (bitRead(Device_Status, Lights_Status)) {                                // are the lights enabled
-        if (bitRead(Device_Status, RUN_Status)) {                               // Run_Active led
-            if (millis() >= RUN_Active_Led_Start_Time + Led_On_Time) {
-                RUN_Active_Led_Start_Time = millis();
-                digitalWrite(RUN_Active_led_pin, !digitalRead(RUN_Active_led_pin));  // toggle the RUN led
-            }
-            else {
-                digitalWrite(RUN_Active_led_pin, OFF);                          // turn the RUN led off
-            }
-        }
-        if (bitRead(Device_Status, Ethernet_Status)) {                          // Ethernet Active
-            if (millis() >= Shield_Led_Start_Time + Led_On_Time) {
-                Shield_Led_Start_Time = millis();
-                digitalWrite(Shield_led_pin, !digitalRead(Shield_led_pin));     // toggle the Shield led
-            }
-            else {
-                digitalWrite(Shield_led_pin, OFF);                              // turn the Shield led off
-            }
-        }
-        digitalWrite(Reset_Light_pin, ON);
-    }
-    else {
-        digitalWrite(Reset_Light_pin, OFF);
     }
 }
 uint16_t getWdtTimeoutMs() {
@@ -1612,31 +1444,9 @@ void printBuildDateTime(char* formattedDateTime, size_t bufferSize) {
     char monthStr[4];
     int day, year, month;
     int hour, minute, second;
-    // Extract month, day, and year from __DATE__
-    sscanf(__DATE__, "%3s %2d %4d", monthStr, &day, &year);
-    // Convert month abbreviation to numeric value (1-12)
-    month = (strstr(months, monthStr) - months) / 3 + 1;
-    // Extract hour, minute, and second from __TIME__
-    sscanf(__TIME__, "%2d:%2d:%2d", &hour, &minute, &second);
+    sscanf(__DATE__, "%3s %2d %4d", monthStr, &day, &year);     // Extract month, day, and year from __DATE__
+    month = (strstr(months, monthStr) - months) / 3 + 1;        // Convert month abbreviation to numeric value (1-12)
+    sscanf(__TIME__, "%2d:%2d:%2d", &hour, &minute, &second);   // Extract hour, minute, and second from __TIME__
     // Format the date and time as "yyyy/mm/dd hh:mm:ss"
-    snprintf(formattedDateTime, bufferSize, "%04d/%02d/%02d %02d:%02d:%02d",
-        year, month, day, hour, minute, second);
-    // Print the formatted date and time
-    //Serial.println(formattedDateTime);
+    snprintf(formattedDateTime, bufferSize, "%04d/%02d/%02d %02d:%02d:%02d", year, month, day, hour, minute, second);
 }
-
-
-/*
-void console_print(bool line_feed, const __FlashStringHelper* message) {
-    Serial.print(millis(), DEC);  // Print the current timestamp
-    Serial.print("\t");            // Tab for spacing
-    Serial.print(message);       // Print the message
-    if (line_feed) Serial.println();
-}
-void console_print(bool line_feed, const char* message) {
-    Serial.print(millis(), DEC);
-    Serial.print("\t");
-    Serial.print(message);  // Use Serial.print to avoid a newline
-    if (line_feed) Serial.println();
-}
-*/
