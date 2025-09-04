@@ -18,9 +18,6 @@
     <ClInclude Include="__vm\.Telescope_Hub.vsarduino.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="..\Common_Files\Telescope_Commands.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="Telescope_Hub.ino" />
