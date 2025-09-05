@@ -11,38 +11,9 @@
         b) Otherwise forward the received packet to the indicated target
     2. Receive packets of information from the attached devices
         a)  Forward the received packets to the indicated target
-
-        Version Control --------------------------------------------------------------------------------
-Date		Version Description
-27/01/2018  1.0
-11/05/2021	1.1     Updated to be compatible with Telescope and Focuser
-06/11/2021	1.2     Introduction of Panel Functionality, Code Tidy up
-14/07/2022	1.3     Code Tidy Up, made compatible with current telescope commands, status display now via API
-19/08/2022  1.4     Log File Support Added
-21/09/2022  1.5     Log File replaced with logging to serial line, now removed
-05/02/2023  1.6     Recommenced review
-16/02/2023  1.7     Added Pseudo serial connector so that the Exerciser can emulate the Operator
-09/03/2023  1.8     Ability to selectively send heartbeat messages to the exerciser and/or the panel, they are always sent to Operator
-30/03/2023  1.9     Hub only sends its own heartbeat to the Operator (when connected), but receives from all devices, except the Panel
-18/07/2023  1.10    Exerciser removed as it's packets should be handled by the Port it is connected to
-20/07/2023  1.11    Introduced configuration piano switch
-01/10/2024  2.0     Development Restarted
-24/10/2024  2.1     Functionality reduced to support only Hub, Altitude, Azimuth and Focuser communications
-26/10/2024  2.2     Ethernet protocol changed to TCP
-29/10/2024  2.3     Log File re-introduced, all functionality tested, appears to be ok
-30/10/2024  2.4     Added functionality to get Time and Date Information
-01/11/2024  2.5     Added free memory to environmental parameters
-07/11/2024  2.6     Day of Week calculation added
-09/11/2024  2.7     Simulations Debugged and all working
-16/11/2024  2.8     Simulation code removed
-27/11/2024  2.9     Retrieve removed, client.print replaced with client.write
-28/11/2024  2.10    Unnecessary functionality (Retrieve, Temperature and Voltage) removed
-22/08/2025  2.11    Log File and Date and Time Functionality, updated to version 2.3 of Telescope_Commands
-04/09/2025  3.0     Log File functionality removed and coms changed to use packethandler.h
-04/09/2025  3.1     Communications with Operator syncronised with Jamie's New Exerciser
 */
-constexpr double Firmware_Version = (double)3.1;
 // Inclusions -------------------------------------------------------------------------------------
+#include "G:\My Drive\Telescope\Common_Files\Change_Log.h"
 #include <DHT.h>
 #include <DHT_U.h>
 #include <Adafruit_Sensor.h>
@@ -56,8 +27,6 @@ constexpr double Firmware_Version = (double)3.1;
 #include <time.h>
 #include <TimeLib.h>
 // Compiler Definitions ---------------------------------------------------------------------------
-//#define SD_DEBUG
-//#define DISPLAY_FREE_MEMORY
 #define PRINT_IO
 #include <G:\My Drive\Telescope\Common_Files\Telescope_Commands.h>
 #include <G:\My Drive\\Telescope\\Common_Files\PacketHandler.h>
@@ -363,7 +332,7 @@ bool Process_Packet_Received_from_Operator() {                                  
             if (Incoming_Packet_from_Operator.field.PacketType == GET) {
                 Prepare_and_Send_Reply_to_Operator(Operator,
                     Request_Firmware_Version,
-                    Firmware_Version,
+                    Hub_Firmware_Version,
                     0,
                     0,
                     0,
