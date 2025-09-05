@@ -2,11 +2,10 @@
   Arduino Ethernet Telescope Hub
         Interfaces Steve and Jamie Gould's Telescope to a ASCOM compliant software driver
         Declination = Altitude = north/south = up down
-        Right Ascension = Azimuth  = east/west = left right
+        Right Ascension = Azimuth  = east/west = left right, clockwise anti-clockwise
         Communications to the motor controllers is made through this HUB.
     Functionality:
     1. Receive packets of information from the Operator (Windows PC)
-        a) Receive packets from Operator and respond with ACK
         a) If the target is the Hub execute the contained command
         b) Otherwise forward the received packet to the indicated target
     2. Receive packets of information from the attached devices
@@ -233,13 +232,13 @@ bool Check_Operator_Packet_Received(void) {
     }
     while (client && client.connected() && client.available() > 0) {
         uint8_t thisbyte = client.read();                                   // read the character
-        if (thisbyte == (uint8_t)STX) {                                     // look for start character
+        if (thisbyte == (uint8_t)Control_Characters::STX) {                 // look for start character
             Operator_string_ptr = 0;                                        // start character received so zero the string pointer
-            Incoming_Packet_from_Operator.character[Operator_string_ptr++] = (uint8_t)STX;      // start of packet, store and increment the string pointer
+            Incoming_Packet_from_Operator.character[Operator_string_ptr++] = thisbyte;      // start of packet, store and increment the string pointer
         }
         else {
-            if (thisbyte == (uint8_t)EOT) {                                 // characters was not an STX check for ETX
-                Incoming_Packet_from_Operator.character[Operator_string_ptr++] = (uint8_t)EOT;  // save the EOT and increment the string pointer
+            if (thisbyte == (uint8_t)Control_Characters::EOT) {                                 // characters was not an STX check for ETX
+                Incoming_Packet_from_Operator.character[Operator_string_ptr++] = thisbyte;  // save the EOT and increment the string pointer
                 console_print(true, "\tIncoming Packet from Operator:", true);
                 Operator_string_ptr = 0;                                         // zero the string pointer
                 return true;                                                // return true because we have a packet
@@ -252,18 +251,18 @@ bool Check_Operator_Packet_Received(void) {
     return false;
 }
 bool Check_Altitude_Packet_Received(void) {
-    while (Altitude_outptr != Altitude_inptr) {                                 // check Altitude serial buffer for data
-        uint8_t thisbyte = Altitude_inbuffer[Altitude_outptr++];                // take a characters from the input buffer and increment pointer
-        if (thisbyte == (uint8_t)SOH) {                                         // look for the SOH
-            Incoming_Packet_from_Altitude.character[Altitude_string_ptr++] = (uint8_t)SOH; // store the SOH and increment the string pointer
+    while (Altitude_outptr != Altitude_inptr) {                                         // check Altitude serial buffer for data
+        uint8_t thisbyte = Altitude_inbuffer[Altitude_outptr++];                        // take a characters from the input buffer and increment pointer
+        if (thisbyte == (uint8_t)Control_Characters::STX) {                             // look for the SOH
+            Incoming_Packet_from_Altitude.character[Altitude_string_ptr++] = thisbyte;  // store the STX and increment the string pointer
         }
         else {
-            if (thisbyte == (uint8_t)EOT) {                                         // characters was not an SOH check for ETX
-                Incoming_Packet_from_Altitude.character[Altitude_string_ptr++] = (uint8_t)EOT; // save the EOT and increment the string pointer
+            if (thisbyte == (uint8_t)Control_Characters::ETX) {                         // characters was not an SOH check for ETX
+                Incoming_Packet_from_Altitude.character[Altitude_string_ptr++] = thisbyte; // save the EOT and increment the string pointer
                 console_print(true, "\tIncoming Packet from Altitude:", true);
-                Altitude_string_ptr = 0;                                            // zero the string pointer
+                Altitude_string_ptr = 0;                                                // zero the string pointer
                 ALT_Packet_Received_Count++;
-                return true;                                                        // return true because we have a packet
+                return true;                                                            // return true because we have a packet
             }
             else {
                 Incoming_Packet_from_Altitude.character[Altitude_string_ptr++] = thisbyte;    // Not a control so save it and increment string pointer
@@ -273,35 +272,35 @@ bool Check_Altitude_Packet_Received(void) {
     return false;
 }
 bool Check_Azimuth_Packet_Received(void) {
-    while (Azimuth_outptr != Azimuth_inptr) {                                   // check Azimuth serial buffer for data
-        uint8_t thisbyte = Azimuth_inbuffer[Azimuth_outptr++];                  // take a characters from the input buffer and increment pointer
-        if (thisbyte == (uint8_t)SOH) {                                         // look for the SOH
-            Incoming_Packet_from_Azimuth.character[Azimuth_string_ptr++] = (uint8_t)SOH;  // store the SOH and increment the string pointer
+    while (Azimuth_outptr != Azimuth_inptr) {                                               // check Azimuth serial buffer for data
+        uint8_t thisbyte = Azimuth_inbuffer[Azimuth_outptr++];                              // take a characters from the input buffer and increment pointer
+        if (thisbyte == (uint8_t)Control_Characters::STX) {                                 // look for the SOH
+            Incoming_Packet_from_Azimuth.character[Azimuth_string_ptr++] = thisbyte;        // store the SOH and increment the string pointer
         }
         else {
-            if (thisbyte == (uint8_t)EOT) {                                          // characters was not an STX check for ETX
-                Incoming_Packet_from_Azimuth.character[Azimuth_string_ptr++] = (uint8_t)EOT;  // save the EOT and increment the string pointer
+            if (thisbyte == (uint8_t)Control_Characters::ETX) {                             // characters was not an STX check for ETX
+                Incoming_Packet_from_Azimuth.character[Azimuth_string_ptr++] = thisbyte;    // save the EOT and increment the string pointer
                 console_print(true, "\tIncoming Packet from Azimuth:", true);
-                Azimuth_string_ptr = 0;                                             // zero the string pointer
+                Azimuth_string_ptr = 0;                                                     // zero the string pointer
                 AZI_Packet_Received_Count++;
                 return true;
             }
             else {
-                Incoming_Packet_from_Azimuth.character[Azimuth_string_ptr++] = thisbyte;  // Not a control so save it and increment string pointer
+                Incoming_Packet_from_Azimuth.character[Azimuth_string_ptr++] = thisbyte;    // Not a control so save it and increment string pointer
             }
         }
     } // end of while Azimuth
     return false;
 }
 bool Check_Focuser_Packet_Received(void) {
-    while (Focuser_outptr != Focuser_inptr) {                                       // check Focuser serial buffer for data
-        uint8_t thisbyte = Focuser_inbuffer[Focuser_outptr++];                      // take a characters from the input buffer and increment pointer
-        if (thisbyte == (char)SOH) {                                                // look for the SOH
-            Incoming_Packet_from_Focuser.character[Focuser_string_ptr++] = (uint8_t)SOH;      // store the SOH and increment the string pointer
+    while (Focuser_outptr != Focuser_inptr) {                                           // check Focuser serial buffer for data
+        uint8_t thisbyte = Focuser_inbuffer[Focuser_outptr++];                          // take a characters from the input buffer and increment pointer
+        if (thisbyte == (uint8_t)Control_Characters::STX) {                             // look for the SOH
+            Incoming_Packet_from_Focuser.character[Focuser_string_ptr++] = thisbyte;    // store the STX and increment the string pointer
         }
         else {
-            if (thisbyte == (char)EOT) {                                            // characters was not an STX check for ETX
-                Incoming_Packet_from_Focuser.character[Focuser_string_ptr++] = (uint8_t)EOT;  // save the EOT and increment the string pointer
+            if (thisbyte == (uint8_t)Control_Characters::ETX) {                                            // characters was not an STX check for ETX
+                Incoming_Packet_from_Focuser.character[Focuser_string_ptr++] = thisbyte;    // save the EOT and increment the string pointer
                 console_print(true, "\tIncoming Packet from Focuser:", true);
                 Focuser_string_ptr = 0;                                             // zero the string pointer
                 FOC_Packet_Received_Count++;
@@ -393,7 +392,7 @@ void Prepare_and_Send_Reply_to_Operator(uint8_t source, uint8_t command, uint16_
     Outgoing_Packet_to_Operator.field.MessageSource = source;
     Outgoing_Packet_to_Operator.field.MessageTarget = Operator;
     Outgoing_Packet_to_Operator.field.CommandNumber = command;
-    Outgoing_Packet_to_Operator.field.PacketType = REP;
+    Outgoing_Packet_to_Operator.field.PacketType = Packet_Types::REP;
     Outgoing_Packet_to_Operator.field.CurrentStatus = Device_Status;
     Outgoing_Packet_to_Operator.field.ParameterOne = p1;
     Outgoing_Packet_to_Operator.field.ParameterTwo = p2;
