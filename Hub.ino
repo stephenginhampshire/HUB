@@ -26,7 +26,10 @@
 #include <time.h>
 #include <TimeLib.h>
 // Compiler Definitions ---------------------------------------------------------------------------
-#define PRINT_IO
+bool setup_print = true;
+bool comms_print = true;
+bool home_print = true;
+bool motor_print = true;
 #include <G:\My Drive\Telescope\Common_Files\Telescope_Commands.h>
 #include <G:\My Drive\\Telescope\\Common_Files\PacketHandler.h>
 #define console Serial
@@ -121,77 +124,77 @@ void setup() {
     while (!Serial) {
         ; // wait for serial port to connect. Needed for native USB port only
     }
-    console_print(true, F("Setup Commenced"), true);
+    console_print(setup_print, true, F("Setup Commenced"), true);
     pinMode(RUN_Active_led_pin, OUTPUT);
     Led_Control(RUN_Active_led_pin, ON);            // turn the run led on
     Reset_Switch.attach(Reset_Switch_pin);
     Reset_Switch.interval(5);
-    console_print(true, F("Starting Ethernet Initialisation"), true);
+    console_print(setup_print, true, F("Starting Ethernet Initialisation"), true);
     Ethernet.begin(mac, ip, my_dns, gateway, subnet);                         // Start Ethernet
     delay(1000);
     if (Ethernet.hardwareStatus() == EthernetNoHardware) {
         Wait_for_Reset(F("Ethernet Shield not found"));
     }
     else {
-        console_print(true, F("\tEthernet Shield Found"), true);
+        console_print(setup_print, true, F("\tEthernet Shield Found"), true);
     }
     if (Ethernet.linkStatus() == LinkOFF) {
-        console_print(true, F("\tEthernet cable not connected"), true);
+        console_print(setup_print, true, F("\tEthernet cable not connected"), true);
     }
     else {
-        console_print(true, F("\tEthernet cable connected"), true);
+        console_print(setup_print, true, F("\tEthernet cable connected"), true);
     }
     //EthernetClient client = server.accept();
     Status.bit.Operator = 1;
-    console_print(true, F("Ethernet Initialisation Complete"), true);
-    console_print(true, F("Serial Port Initialisation"), true);
+    console_print(setup_print, true, F("Ethernet Initialisation Complete"), true);
+    console_print(setup_print, true, F("Serial Port Initialisation"), true);
     pinMode(Azimuth_RX_pin, INPUT);
     if (digitalRead(Azimuth_RX_pin)) {
-        console_print(true, F("\tAzimuth Communication Line Connected"), true);
+        console_print(setup_print, true, F("\tAzimuth Communication Line Connected"), true);
         Status.bit.Azimuth = 1;
     }
     else {
-        console_print(true, F("\tAzimuth Communication Line not Connected"), true);
+        console_print(setup_print, true, F("\tAzimuth Communication Line not Connected"), true);
         Status.bit.Azimuth = 0;
     }
     Azimuth_Port.begin(Azimuth_baud, SERIAL_8N2);					// initialise the Altitude serial port    
     Azimuth_Port.flush();                                          // clear the Altitude serial buffer
     pinMode(Altitude_RX_pin, INPUT);
     if (digitalRead(Altitude_RX_pin)) {
-        console_print(true, F("\tAltitude Communication Line Connected"), true);
+        console_print(setup_print, true, F("\tAltitude Communication Line Connected"), true);
         Status.bit.Altitude = 1;
     }
     else {
-        console_print(true, F("\tAltitude Communication Line not Connected"), true);
+        console_print(setup_print, true, F("\tAltitude Communication Line not Connected"), true);
         Status.bit.Altitude = 0;
     }
     Altitude_Port.begin(Azimuth_baud, SERIAL_8N2);					// initialise the Azimuth serial port
     Altitude_Port.flush();											// clear the Azimuth serial buffer
     pinMode(Focuser_RX_pin, INPUT);
     if (digitalRead(Focuser_RX_pin)) {
-        console_print(true, F("\tFocuser Communication Line Connected"), true);
+        console_print(setup_print, true, F("\tFocuser Communication Line Connected"), true);
         Status.bit.Focuser = 1;
     }
     else {
-        console_print(true, F("\tFocuser Communication Line not Connected"), true);
+        console_print(setup_print, true, F("\tFocuser Communication Line not Connected"), true);
         Status.bit.Focuser = 0;
     }
     Focuser_Port.begin(Focuser_baud, SERIAL_8N2);					// initialise the Focuser serial port
     Focuser_Port.flush();											// clear the Focuser serial buffer
-    console_print(true, F("Serial Port Initialisation Complete"), true);
-    console_print(true, F("Enabling WatchDog Timer"), true);
+    console_print(setup_print, true, F("Serial Port Initialisation Complete"), true);
+    console_print(setup_print, true, F("Enabling WatchDog Timer"), true);
     wdt_enable(WDTO_4S);                                    // 4 second timeout
     if (getWdtTimeoutMs()) {
         snprintf(Display_Buffer, sizeof(Display_Buffer), "\tCurrent Watchdog Timeout: %d (mS)", getWdtTimeoutMs());
-        console_print(true, Display_Buffer, true);
+        console_print(setup_print, true, Display_Buffer, true);
     }
     else {
-        console_print(true, F("\tWatchdog Timer Initialisation failure"), true);
+        console_print(setup_print, true, F("\tWatchdog Timer Initialisation failure"), true);
     }
-    console_print(true, F("Watchdog Timer Initialisation Complete"), true);
+    console_print(setup_print, true, F("Watchdog Timer Initialisation Complete"), true);
     Led_Control(RUN_Active_led_pin, ON);
-    console_print(true, F("Setup Complete"), true);
-    console_print(true, F("Starting Main Loop"), true);
+    console_print(setup_print, true, F("Setup Complete"), true);
+    console_print(setup_print, true, F("Starting Main Loop"), true);
 } // end setup
 // Main -------------------------------------------------------------------------------------------
 void loop() {
@@ -228,7 +231,7 @@ void Maintain_Internet() {
 bool Check_Operator_Packet_Received(void) {
     if (server.available()) {
         client = server.accept();
-        console_print(true, "Client connected", true);
+        console_print(comms_print, true, "Client connected", true);
     }
     while (client && client.connected() && client.available() > 0) {
         uint8_t thisbyte = client.read();                                   // read the character
@@ -239,7 +242,7 @@ bool Check_Operator_Packet_Received(void) {
         else {
             if (thisbyte == (uint8_t)Control_Characters::EOT) {                                 // characters was not an STX check for ETX
                 Incoming_Packet_from_Operator.character[Operator_string_ptr++] = thisbyte;  // save the EOT and increment the string pointer
-                console_print(true, "\tIncoming Packet from Operator:", true);
+                console_print(comms_print, true, "\tIncoming Packet from Operator:", true);
                 Operator_string_ptr = 0;                                         // zero the string pointer
                 return true;                                                // return true because we have a packet
             }
@@ -259,7 +262,7 @@ bool Check_Altitude_Packet_Received(void) {
         else {
             if (thisbyte == (uint8_t)Control_Characters::ETX) {                         // characters was not an SOH check for ETX
                 Incoming_Packet_from_Altitude.character[Altitude_string_ptr++] = thisbyte; // save the EOT and increment the string pointer
-                console_print(true, "\tIncoming Packet from Altitude:", true);
+                console_print(comms_print, true, "\tIncoming Packet from Altitude:", true);
                 Altitude_string_ptr = 0;                                                // zero the string pointer
                 ALT_Packet_Received_Count++;
                 return true;                                                            // return true because we have a packet
@@ -280,7 +283,7 @@ bool Check_Azimuth_Packet_Received(void) {
         else {
             if (thisbyte == (uint8_t)Control_Characters::ETX) {                             // characters was not an STX check for ETX
                 Incoming_Packet_from_Azimuth.character[Azimuth_string_ptr++] = thisbyte;    // save the EOT and increment the string pointer
-                console_print(true, "\tIncoming Packet from Azimuth:", true);
+                console_print(comms_print, true, "\tIncoming Packet from Azimuth:", true);
                 Azimuth_string_ptr = 0;                                                     // zero the string pointer
                 AZI_Packet_Received_Count++;
                 return true;
@@ -301,7 +304,7 @@ bool Check_Focuser_Packet_Received(void) {
         else {
             if (thisbyte == (uint8_t)Control_Characters::ETX) {                                            // characters was not an STX check for ETX
                 Incoming_Packet_from_Focuser.character[Focuser_string_ptr++] = thisbyte;    // save the EOT and increment the string pointer
-                console_print(true, "\tIncoming Packet from Focuser:", true);
+                console_print(comms_print, true, "\tIncoming Packet from Focuser:", true);
                 Focuser_string_ptr = 0;                                             // zero the string pointer
                 FOC_Packet_Received_Count++;
                 return true;
@@ -314,20 +317,20 @@ bool Check_Focuser_Packet_Received(void) {
     return false;
 }
 bool Process_Packet_Received_from_Operator() {                                   // Process a packet from the Operator  
-    console_print(true, F("Processing Packet Received from Operator"), true);
+    console_print(comms_print, true, F("Processing Packet Received from Operator"), true);
     switch (Incoming_Packet_from_Operator.field.MessageTarget) {                 // switch on the target
     case Devices::Hub: {
-        console_print(false, F("Destination HUB: "), true);
+        console_print(comms_print, true, F("Destination HUB: "), true);
         switch (Incoming_Packet_from_Operator.field.CommandNumber) {             // switch on the Command Number
         case (Commands::CMD_Reset): {
-            console_print(true, F("Reset Command Received from Operator"), true);
+            console_print(comms_print, true, F("Reset Command Received from Operator"), true);
             if (Incoming_Packet_from_Operator.field.PacketType == CMD) {
                 Wait_for_Reset(F("Reset Requested by Operator"));
             }
             break;
         }
         case (Commands::Request_Firmware_Version): {
-            console_print(true, F("Firmware Version Get Received from Operator"), true);
+            console_print(comms_print, true, F("Firmware Version Get Received from Operator"), true);
             if (Incoming_Packet_from_Operator.field.PacketType == GET) {
                 Prepare_and_Send_Reply_to_Operator(Operator,
                     Request_Firmware_Version,
@@ -342,7 +345,7 @@ bool Process_Packet_Received_from_Operator() {                                  
             break;
         }
         case (Commands::Statistics): {
-            console_print(true, F("Statistics Get Received from Operator"), true);
+            console_print(comms_print, true, F("Statistics Get Received from Operator"), true);
             if (Incoming_Packet_from_Operator.field.PacketType == GET) {
                 Prepare_and_Send_Reply_to_Operator(Operator,
                     Statistics,
@@ -358,17 +361,17 @@ bool Process_Packet_Received_from_Operator() {                                  
         }
         }
     case Devices::Altitude: {                                                     // send the packet to the ALT
-        console_print(true, F("Packet Destination Altitude"), true);
+        console_print(comms_print, true, F("Packet Destination Altitude"), true);
         Transmit_Packet_to_Target(Incoming_Packet_from_Operator);
         break;
     }
     case Devices::Azimuth: {
-        console_print(true, F("Packet Destination Azimuth"), true);
+        console_print(comms_print, true, F("Packet Destination Azimuth"), true);
         Transmit_Packet_to_Target(Incoming_Packet_from_Operator);
         break;
     }
     case Devices::Focuser: {
-        console_print(true, F("Packet Destination Focuser"), true);
+        console_print(comms_print, true, F("Packet Destination Focuser"), true);
         Transmit_Packet_to_Target(Incoming_Packet_from_Operator);
         break;
     }
@@ -379,10 +382,10 @@ bool Process_Packet_Received_from_Operator() {                                  
 void Transmit_to_Operator(PacketUnion data) {
     if (Status.bit.Operator) {                           // check if Operator is available
         while (!server.availableForWrite()) {
-            console_print(true, F("Waiting for server available"), true);
+            console_print(comms_print, true, F("Waiting for server available"), true);
             delay(10);
         }
-        console_print(false, F("Sending Packet to Operator"), true);
+        console_print(comms_print, true, F("Sending Packet to Operator"), true);
         for (int i = 0; i < Packet_Length; i++) {
             client.write(Outgoing_Packet_to_Operator.character[i]);
         }
@@ -403,6 +406,9 @@ void Prepare_and_Send_Reply_to_Operator(uint8_t source, uint8_t command, uint16_
     Transmit_Packet_to_Target(Outgoing_Packet_to_Operator);
 }
 void Transmit_Packet_to_Target(PacketUnion data) {
+    if (data.field.PacketType == Commands::Heartbeat) {
+        return;                                             // throw away received heartbeats
+    }
     switch (data.field.MessageTarget) {
     case Devices::Operator: {
         for (int i = 0; i < Packet_Length; i++) {
@@ -418,7 +424,7 @@ void Transmit_Packet_to_Target(PacketUnion data) {
             }
             Azimuth_Port.write(data.character[i]);
         }
-        console_print(true, F("Packet sent to Azimuth"), true);
+        console_print(comms_print, true, F("Packet sent to Azimuth"), true);
         AZI_Packet_Transmitted_Count++;
         break;
     }
@@ -429,7 +435,7 @@ void Transmit_Packet_to_Target(PacketUnion data) {
             }
             Altitude_Port.write(data.character[i]);
         }
-        console_print(true, F("Packet sent to Altitude"), true);
+        console_print(comms_print, true, F("Packet sent to Altitude"), true);
         ALT_Packet_Transmitted_Count++;
         break;
     }
@@ -440,19 +446,14 @@ void Transmit_Packet_to_Target(PacketUnion data) {
             }
             Focuser_Port.write(data.character[i]);
         }
-        console_print(true, F("Packet sent to Focuser"), true);
+        console_print(comms_print, true, F("Packet sent to Focuser"), true);
         FOC_Packet_Received_Count++;
         break;
     }
     }
 }
 void Led_Control(uint8_t led, bool state) {
-    switch (led) {
-    case (RUN_Active_led_pin): {
-        digitalWrite(RUN_Active_led_pin, state);
-        break;
-    }
-    }
+    digitalWrite(RUN_Active_led_pin, state);
 }
 uint16_t getWdtTimeoutMs() {
     // Mask out only the WDP bits from WDTCSR (bits 0-3)
@@ -466,9 +467,9 @@ uint16_t getWdtTimeoutMs() {
 }
 void Wait_for_Reset(const __FlashStringHelper* message) {
     int trys = 0;
-    console_print(false, F("Failure: "), true);
+    console_print(comms_print, true, F("Failure: "), true);
     Serial.print(message);
-    console_print(true, F(", Press Reset"), true);
+    console_print(comms_print, true, F(", Press Reset"), true);
     do {
         delay(500);
         digitalWrite(RUN_Active_led_pin, !digitalRead(RUN_Active_led_pin));         // Toggle the run light to signal problem
