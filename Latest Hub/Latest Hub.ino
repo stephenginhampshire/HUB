@@ -16,9 +16,6 @@
 #include "C:\Users\Stephen\Documents\Telescope\Common_Files\Change_Log.h"
 #include "C:\Users\Stephen\Documents\Telescope\Common_Files\Telescope_Commands.h"
 #include "C:\Users\Stephen\Documents\Telescope\Common_Files\PacketHandler.h"
-#include <DHT.h>
-#include <DHT_U.h>
-#include <Adafruit_Sensor.h>
 #include <avr/wdt.h>
 #include <avr/io.h>
 #include <Bounce2.h>
@@ -483,3 +480,4 @@ void Wait_for_Reset(const __FlashStringHelper* message) {
     wdt_enable(WDTO_15MS);  // Enable the watchdog timer with a timeout of 15 ms
     while (true) {}         // Infinite loop to allow the watchdog to reset the microcontroller
 }
+
